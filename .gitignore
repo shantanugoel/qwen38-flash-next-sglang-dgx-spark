@@ -1,0 +1,6 @@
+/.env
+/build/
+/data/
+__pycache__/
+*.pyc
+*.log

@@ -1,0 +1,14 @@
+This recipe's glue scripts are Apache-2.0.
+
+The two SGLang source patches under patches/ are adapted from
+hashd1ve/qwen38-flash-next-one-dgx-spark (MIT, Copyright 2026 hashd1ve):
+
+  patches/ple_mmap.py
+  patches/qsa_trtllm_sm120.py
+
+See those files for the MIT notice. The SM121 SDPA intercept drop
+(patches/qsa_drop_sm121_sdpa.py) is only needed if the base image injected
+a PyTorch SDPA fallback in front of TRT-LLM sparse decode.
+
+SGLang is Apache-2.0. Model weights are not included and remain subject to
+the Qwen Community License.
