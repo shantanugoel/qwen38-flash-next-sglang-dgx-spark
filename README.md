@@ -110,6 +110,14 @@ OpenAI-compatible API.
 | `bench/gsm8k.py` | GSM8K sanity slice |
 | `scripts/bench_tb.sh` | Terminal-Bench subset via Harbor |
 
+**What this repo does NOT establish:** these numbers show the *serving stack* is
+stable over long sessions — 120 turns, ~600 tool turns, no corruption, flat TTFT.
+They do **not** establish that the model is good at complex multi-step coding.
+The coding evidence here is one trivial executed function plus GSM8K; the
+benchmark that would answer it (Terminal-Bench) cannot run on this hardware.
+To find out, run `scripts/bench_tb.sh` from an x86 host against this server, or
+point a real coding agent at the endpoint.
+
 **Terminal-Bench does not run on a GB10.** The TB 2.x task images are
 `linux/amd64` only and there is no qemu binfmt handler on this class of box, so
 the task container exits 255 on platform mismatch. `scripts/bench_tb.sh` is
@@ -162,6 +170,7 @@ turns emit a tool call** versus 119 with thinking off. See *Client notes*.
 | | |
 | --- | ---: |
 | smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **12/12** |
+| MTP `spec_accept_length` | **3.95 / 4.0** |
 | GSM8K, n=20, thinking off | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
 | — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
@@ -188,6 +197,33 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | MTP depth changes | Accept length is already 3.95/4.0; no headroom |
 | **512k context** | Boots, but yields **201984 KV tokens — below the 262k default**. The published Qwen static-YaRN recipe targets a `rope_scaling` field this checkpoint does not have (it is sectioned **mrope** under `text_config.rope_parameters`), and `rope_type` stays `default` after the override. **Not achieved; 262k is the only supported context** |
 | vLLM | **Untested.** It needs `--no-enable-prefix-caching` on sm_121, and prefix caching is worth 21× warm prefill here |
+| `MAX_RUNNING=1` | No gain, **+21% wall clock** on a 40-turn session |
+| `PREFILL=1024` | 32k TTFT **12.31 s vs 10.37 s** at 4096 — smaller chunks cost TTFT |
+| `--language-only` (vision off) | **Does not disable vision.** It is for encoder *disaggregation*; with no encoder service configured the local tower still runs and still answers image questions correctly. 89 MiB and 0 KV difference — there was never a headroom argument |
+
+### Vision
+
+Vision is **on** and verified by a test that cannot be passed blind: a
+four-quadrant image (red / yellow / green / blue) with the model asked for one
+named quadrant. All four positions answered correctly.
+
+An earlier version of this test showed a solid red square and asked for the
+dominant colour — a text-only server passes that by guessing "Red". If you write
+a vision smoke test, make it positional.
+
+A true vision-off comparison is **not possible** with this checkpoint and image:
+`--language-only` does not remove the tower (see the table above). It would need
+a text-only checkpoint or a disaggregated encoder deployment.
+
+### An unexplained observation, recorded as such
+
+One config — 512k context with four other changes — posted agentic decode of
+**56–60 tok/s** against ~50–52 everywhere else. Each of its five variables was
+then isolated (`MEMFRAC`, `--mamba-full-memory-ratio`, `MAX_RUNNING`, `PREFILL`,
+page-cache residency) and **none reproduces it**. It is a single observation with
+no surviving explanation, it is not a tuning lead, and it is not an argument for
+512k. Details in `RESEARCH_LOG.md`.
+
 
 ## Credits
 
