@@ -10,7 +10,7 @@ Serve [`RadixArk/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/RadixArk/Qwen
 - **MTP:** the 31 draft tensors are still BF16 inside this NVFP4 pack. `--speculative-draft-model-quantization unquant` stops the draft inheriting `modelopt_fp4`.
 - **Non-root:** the container runs as your uid. Hugging Face cache and the PLE backing file stay host-owned.
 
-Prefill uses the real QSA kernels (llama.cpp GGUF cannot). Decode with MTP is faster than the vLLM mmap recipe on the same checkpoint (~27 tok/s).
+Prefill uses the real QSA kernels (llama.cpp GGUF cannot). We did **not** benchmark vLLM on this box — see *What was tried and rejected* for why the comparison was not run.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ Prefill uses the real QSA kernels (llama.cpp GGUF cannot). Decode with MTP is fa
 # export HF_CACHE=$HOME/.cache/huggingface
 
 ./scripts/prepare.sh          # pull image, patch two files, download weights
-./scripts/serve.sh            # :30000, ~8–20 min first load
+./scripts/serve.sh            # :30000, ~10 min first load, ~10 min after
 ./scripts/smoke.sh            # health + "12*17" → 204
 ```
 
@@ -88,12 +88,20 @@ Second and later boots are **~10 min** end to end. Set
 - `usage.completion_tokens_details.reasoning_tokens` is always 0; reasoning is
   billed as content.
 - Tool calls use the `qwen3_coder` parser and come back as OpenAI `tool_calls`.
-- **Thinking on halves tool-call frequency.** Over an identical 120-turn session,
-  119/120 turns emitted a tool call with thinking off, but only **60/120** with it
-  on — the model answers in prose instead. Nothing is corrupted and recall still
-  works, but an agent loop that treats "no tool call" as a stall will feel steps
-  being dropped. Drive tool-heavy phases with `enable_thinking: false` and leave
-  thinking on for reasoning turns.
+- **Thinking on reduces tool-call frequency, by a variable amount.** Over
+  identical 120-turn sessions, thinking off emitted a tool call on **119/120**
+  turns every time, while thinking on gave **60/120** in one run and **101/120**
+  in another. The spread between those two runs is larger than most differences
+  in this README, so treat it as "fewer and unpredictable", not as a fixed ratio.
+  Nothing is corrupted either way. An agent loop that treats "no tool call" as a
+  stall should drive tool-heavy phases with `enable_thinking: false`.
+- **Thinking on can refuse to repeat something it was told to keep quiet.** In one
+  120-turn run the model was asked at turn 120 for a code it had been given at
+  turn 3 alongside the note "Do not repeat unless asked". With thinking off it
+  answered. With thinking on it recalled the source correctly but declined to
+  repeat the value, reasoning about disclosure first. Recall was intact; the
+  behaviour was a refusal. Worth knowing if an agent stores credentials in its own
+  transcript and later needs them back.
 
 ## Benchmarks
 
@@ -103,7 +111,7 @@ OpenAI-compatible API.
 | | |
 | --- | --- |
 | `bench/decode.py` | code + prose decode rate, thinking on and off |
-| `bench/quality.py` | math, tool call, executed code, multi-turn fact, vision, effort sweep |
+| `bench/quality.py` | math, tool call, executed code, multi-turn fact, positional vision, effort sweep |
 | `bench/longctx.py` | 8k/32k needle and prefix-cache resend TTFT |
 | `bench/agentic.py` | long-horizon tool-calling session; TTFT / decode / cache-hit banded by turn |
 | `bench/bfcl.py` | fixed 100-case BFCL subset (AST, irrelevance, multi-turn) |
@@ -134,22 +142,32 @@ context, clock-capped GB10. Every number below is from `bench/` in this repo.
 
 120 turns, one tool call per turn, growing context, `bench/agentic.py`.
 
+Measured on the shipped config (this exact `serve.sh`), thinking **off**:
+
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.55 s | 47.8 tok/s | 95.5% | 2.5k |
-| 41–80 | 0.58 s | 41.7 tok/s | 98.4% | 7.1k |
-| 81–120 | 0.57 s | 45.1 tok/s | **99.0%** | 11.8k |
+| 1–40 | 0.54 s | 50.6 tok/s | 96.1% | 2.7k |
+| 41–80 | 0.56 s | 50.2 tok/s | 98.5% | 7.5k |
+| 81–120 | 0.56 s | 49.8 tok/s | **99.2%** | 12.2k |
 
-Repeated 40-turn runs of the shipped config land at 48–52 tok/s decode,
-0.56–0.60 s TTFT and 97.3–97.5% cache hit, with **0 invalid tool calls** every
-time.
+119/120 turns emitted a tool call, **0 invalid tool calls**, a fact planted at
+turn 3 was recalled correctly at turn 120, 161 s wall clock, final context 14560
+tokens. **TTFT is flat as context grows** — that is the radix cache absorbing the
+resend pattern.
 
-**TTFT is flat as context grows.** 119 tool turns, **0 invalid tool calls**, and a
-fact planted at turn 3 recalled correctly at turn 120.
+Same session, thinking **on**:
 
-With **thinking on**, same session: TTFT 0.39 → 0.29 s, decode 32 → 25 tok/s,
-cache hit 99.4%, 0 invalid tool calls, late recall correct — but only **60 of 120
-turns emit a tool call** versus 119 with thinking off. See *Client notes*.
+| turns | TTFT | decode | cache hit | context |
+| --- | ---: | ---: | ---: | ---: |
+| 1–40 | 0.38 s | 34.5 tok/s | 94.1% | 2.8k |
+| 41–80 | 0.43 s | 29.7 tok/s | 96.4% | 7.6k |
+| 81–120 | 0.47 s | 28.1 tok/s | **97.8%** | 13.2k |
+
+0 invalid tool calls, 593 s wall clock. Reasoning costs roughly 40% of decode
+rate at this horizon.
+
+Repeated 40-turn runs land at 48–52 tok/s decode, 0.56–0.60 s TTFT and
+97.3–97.5% cache hit, with **0 invalid tool calls** every time.
 
 ### Decode
 
@@ -181,7 +199,7 @@ would suggest.
 | | |
 | --- | ---: |
 | smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **12/12** |
-| MTP `spec_accept_length` | **3.95 / 4.0** |
+| MTP `spec_accept_length` | **3.93–3.95 / 4.0** |
 | GSM8K, n=20, thinking off | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
 | — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
@@ -205,7 +223,7 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | `--linear-attn-backend` (flashinfer / cutedsl / nvidia_kda) | **Unreachable.** Compressed QSA pins `page_size=64`, which forces `extra_buffer`, which rejects these backends. Only `--disable-radix-cache` unlocks them, and that costs far more than they give |
 | `--mamba-full-memory-ratio 0.3` | Inert at 262k — `--max-total-tokens` binds before memory does |
 | `PREFILL=8192` + graph bundle | Worst prose decode in the sweep, one quality failure, unattributed 3-flag bundle |
-| MTP depth changes | Accept length is already 3.95/4.0; no headroom |
+| MTP depth changes | Accept length is already 3.93–3.95 / 4.0; no headroom |
 | **512k context** | Boots, but yields **201984 KV tokens — below the 262k default**. The published Qwen static-YaRN recipe targets a `rope_scaling` field this checkpoint does not have (it is sectioned **mrope** under `text_config.rope_parameters`), and `rope_type` stays `default` after the override. **Not achieved; 262k is the only supported context** |
 | vLLM | **Untested.** It needs `--no-enable-prefix-caching` on sm_121, and prefix caching is worth 21× warm prefill here |
 | `MAX_RUNNING=1` | No gain, **+21% wall clock** on a 40-turn session |

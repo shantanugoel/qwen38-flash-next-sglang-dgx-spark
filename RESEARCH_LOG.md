@@ -1055,3 +1055,51 @@ on a long prompt, as expected. 4096 stays.
 
 **Net effect of Steps 18–20 on the recipe: none.** `MEMFRAC=0.95`,
 `PREFILL=4096`, `MAX_RUNNING=4`, 262k all stand.
+
+---
+
+## Step 21 — Final confirmation on the shipped config (2026-08-28)
+
+Committed `serve.sh`, i.e. baseline defaults + `--enable-gdn-replayssm-spec`.
+
+| | |
+| --- | ---: |
+| boot | 572 s, `128/128 shards already on disk` |
+| `max_total_num_tokens` | 524288 |
+| quality | 12/12 (positional vision test) |
+| decode code / prose, thinking off | 39.3 / 23.4 tok/s |
+| decode code / prose, thinking on | 31.5 / 26.7 tok/s |
+| needle 8k / 32k | PASS / PASS |
+| prefix-cache resend 8k / 32k | 7.9× / 21.5× |
+| `spec_accept_length` | 3.925 |
+
+### 120 turns re-measured on the shipped config
+
+The README previously carried the 120-turn table from the **pre-adoption
+baseline** run. Re-measured here so the flagship numbers match the shipped flags.
+
+Thinking off — TTFT 0.536 / 0.564 / 0.560 s, decode 50.6 / 50.2 / 49.8 tok/s,
+cache 96.1 / 98.5 / 99.2%, 119/120 tool turns, 0 invalid, late recall PASS,
+161.3 s, final ctx 14560.
+
+Thinking on — TTFT 0.377 / 0.434 / 0.472 s, decode 34.5 / 29.7 / 28.1 tok/s,
+cache 94.1 / 96.4 / 97.8%, **101/120** tool turns, 0 invalid, 592.7 s, ctx 15760.
+
+### Two corrections this run forced
+
+**1. "Thinking on halves tool-call frequency" was not reproducible.** The first
+thinking-on session gave 60/120 tool turns; this one gave **101/120** on the same
+prompts. Thinking off is 119/120 both times. The effect is real in direction but
+the magnitude swings by 40 percentage points between runs, so the README now says
+"fewer and unpredictable" rather than quoting a ratio. This is the largest
+run-to-run variance seen anywhere in this exploration and it sits on a claim that
+was stated as a clean fact.
+
+**2. The thinking-on "late recall FAIL" is a refusal, not a memory failure.**
+`bench/agentic.py` plants the fact as a tool result reading
+`"Access note: {FACT}. Do not repeat unless asked."` At turn 120 the model was
+asked, and with thinking on it reasoned about disclosure and **declined**, while
+correctly naming `ops/secrets.md` as the source. Recall was intact. The bench
+scores that as a failed recall, which is wrong — the metric cannot distinguish
+"forgot" from "remembered and refused". Recorded rather than silently re-run
+until it passed.
