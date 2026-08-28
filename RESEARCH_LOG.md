@@ -112,3 +112,18 @@ and `scripts/wait_ready.sh`. Image digest confirmed local:
 official image in the background, then baseline boot.
 
 ---
+
+## Step 2 — Official image + patches (2026-08-28)
+
+`prepare.sh` (background, ~1 min after image already local):
+
+- Image `lmsysorg/sglang@sha256:12d3392bdc8be8d35e9a95f191df6aef99c5114bdbefd41bfdc7e760e6d25ec1`
+- PLE: `_alloc_ple_table` inserted into `qwen4_exp.py`
+- SM121 SDPA intercept: **absent** on this tag (drop patch is a no-op)
+- QSA: `_resolve_trtllm_sparse_decode` now `is_sm100_supported() or is_sm120_supported()`
+- Checkpoint revision already complete; no download
+
+**Conclusion (Step 2):** Patches apply cleanly on the newer cookbook image. Do not
+fall back to the Felliks disk-cache image.
+
+---

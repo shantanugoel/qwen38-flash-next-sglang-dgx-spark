@@ -101,13 +101,13 @@ Commit: `Add agentic speed/quality bench harness`.
 
 Background + poll (`AGENTS.md`): `nohup ./scripts/prepare.sh > results/prepare.log 2>&1 &`.
 
-`./scripts/prepare.sh` against `lmsysorg/sglang:qwen38flashnext`. Record image
-digest, whether the SM121 SDPA intercept exists, and whether the two patches apply
-cleanly.
+- [x] `lmsysorg/sglang:qwen38flashnext` @ `sha256:12d3392bdc8be8d35e9a95f191df6aef99c5114bdbefd41bfdc7e760e6d25ec1`
+- [x] PLE mmap patch applied; stock image has **no** SM121 SDPA intercept; SM120 QSA gate applied.
+- [x] Checkpoint already present; no re-download.
 
 If pull/patch fails: stop and log; do not silently switch to the Felliks image.
 
-Commit: only if prepare scripts need a fix.
+No script fix needed.
 
 ### Step 3 — Baseline (current `serve.sh` flags)
 
