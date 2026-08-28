@@ -395,3 +395,67 @@ and the QSA ring-width-8 path stays skipped. `sglang:cache_hit_rate` 0.972.
   (`effort_kwarg=None`). Callers should not expect it to do anything; use
   `enable_thinking` instead.
 - `reasoning_tokens` is always 0 in `usage`; reasoning is billed as content.
+
+---
+
+## Step 5 — Pack A: mem-frac 0.85 + prefill 2048 + max-running 2 + graph bs 8 (2026-08-28)
+
+```
+MEMFRAC=0.85 PREFILL=2048 MAX_RUNNING=2 CUDA_GRAPH_MAX_BS=8 \
+EXTRA_ARGS="--weight-loader-drop-cache-after-load" ./scripts/run_config.sh
+```
+
+### Operator error, and what it accidentally measured
+
+`run_config.sh` was launched without `PLE_DIR`, so it used the committed default
+`./data/ple` — empty — and wrote a **fresh** 47.7 GiB table:
+`PLE table: 0/128 shards already on disk, 128 copied`, `write_bytes` 51.2 GB.
+
+That is a useful accident. The full first fill finished inside a **631 s total
+boot**. Writing 47.7 GiB into a fresh *sparse* file is fast; the 45–60 min figure
+from Step 3 was specifically the **read-modify-write against an already populated
+file under memory pressure**. The reuse patch is still the right fix — it turns
+every restart into the cheap case — but the worst case it avoids is narrower than
+first stated. `data/ple` is now populated, so later runs use the committed
+default and stay fast.
+
+### Config effects
+
+| | baseline 0.95 | packA 0.85 |
+| --- | ---: | ---: |
+| `max_total_num_tokens` | 524288 | **318464** |
+| GPU resident | 103.6 GiB | 97.0 GiB |
+| page cache | 7 GiB | 11 GiB |
+| free | 1 GiB | 4 GiB |
+
+Dropping mem-fraction bought only ~4 GiB of page cache against a 47.7 GiB table
+while costing **39% of the KV budget**. Whatever pack A gained, it is not
+primarily PLE residency — that theory does not survive the numbers.
+
+### Results (clean, `flock` held, single client)
+
+| | packA |
+| --- | ---: |
+| quality | **12/12** incl. vision |
+| decode code EN, thinking off | **38.8 tok/s** (38.4–39.0) |
+| decode prose ES, thinking off | 22.0 tok/s |
+| decode code EN, thinking on | 34.6 tok/s |
+| decode prose ES, thinking on | 23.7 tok/s |
+| needle 8k / 32k | PASS / PASS |
+| TTFT 8k / 32k | 3.77 s / 10.41 s |
+| prefix-cache resend 8k / 32k | 6.7× / **20.9×** |
+| agentic 40 turns, TTFT (bands) | **0.60 / 0.56 / 0.57 s** |
+| agentic decode (bands) | 50.6 / 49.6 / 47.1 tok/s |
+| agentic cache hit (bands) | 90.0 / 95.7 / 97.3 % |
+| agentic invalid tool calls | **0**, late recall PASS |
+| `spec_accept_length` | 3.50 |
+
+38.8 tok/s median is exactly the README's published median. **But the Step 3
+baseline it would be compared against was contaminated by a concurrent second
+bench client, so no "pack A beats baseline" claim can be made from these two
+runs.** A clean baseline re-measure is running before any such claim.
+
+Decode tok/s in the agentic bench (47–51) is higher than in the decode bench
+(38.8) because those turns are short generations onto a warm 90–97% cached
+prefix — that is the realistic agentic number, and it is the one worth quoting
+for this use case.
