@@ -187,46 +187,38 @@ scorer**, not the model — it issues one tool call per turn (correct agentic
 behaviour) while the ground truth lists the whole multi-call sequence for that
 turn. Fix in Step 9.
 
-### Step 9 — BFCL multi-turn scorer fix + re-score — **TODO**
+### Step 9 — BFCL multi-turn scorer — **DONE, split still not measurable**
 
-Let the model loop *within* a turn (feed each tool result back until it stops
-calling), then compare the union of called function names against the turn's
-ground truth. Re-run the 20 multi-turn cases only. Report the corrected split
-accuracy and reissue the headline number; the current 58% is not reportable.
+Scorer fixed (model loops within a turn): 0.0% → 15.0%. Still invalid as a BFCL
+number because our tool backend is a mock. Report the 80 single-turn cases
+(**72.5%**) and mark multi-turn N/A.
 
-### Step 10 — Agentic session with **thinking on** — **IN PROGRESS**
+### Step 10 — Agentic with thinking on — **DONE**
 
-The finalist scenario, and the sharper probe for MTP-rewind / GDN-state
-corruption (the reported failure mode involves reasoning traces). 120 turns,
-tools, radix cache on.
+120 turns, 0 invalid tool calls, late recall PASS, cache hit 99.4%, TTFT falling
+to 0.29 s. Behavioural finding: **60/120 turns emit a tool call vs 119/120 with
+thinking off.**
 
-### Step 11 — Kernel and memory sweep — **QUEUED** (`scripts/sweep.sh`)
+### Step 11 — Kernel and memory sweep — **DONE**
 
-`QUICK=1` (decode + quality only) per config; a boot failure is a **result**,
-not a stop condition — several of these may have no sm_121 cubins.
+One adoption (`--enable-gdn-replayssm-spec`), one deferred
+(`--mamba-full-memory-ratio`, inert at 262k because `--max-total-tokens` binds
+first), one held back (the prefill/graph bundle: worst prose-off, one borderline
+quality failure, and unattributed), and one structural negative (alternative GDN
+kernels are unreachable — compressed QSA pins `page_size=64`).
 
-| tag | config | question |
-| --- | --- | --- |
-| `lin-flashinfer` | `--linear-attn-backend=flashinfer` | GDN kernel; auto-selected on SM100, untested on SM121 |
-| `lin-cutedsl` | `--linear-attn-backend=cutedsl` | same |
-| `lin-nvidia-kda` | `--linear-attn-backend=nvidia_kda` | same |
-| `mamba-ratio-03` | `--mamba-full-memory-ratio=0.3` | recover SSM memory for KV / concurrency |
-| `prefill8192-graph8` | `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` | TTFT bundle |
-| `gdn-replayssm` | `--enable-gdn-replayssm-spec` | does the upstream fix replace our `extra_buffer` + `track_interval 64` workaround? |
+### Step 12 — Radix cache A/B — **IN PROGRESS**
 
-### Step 12 — Radix cache A/B — **TODO**
+`--disable-radix-cache` with the **full** bench, on top of the adopted
+`--enable-gdn-replayssm-spec`. The QUICK sweep could not answer this: short
+unique prompts make the prefix cache irrelevant by construction, which is why
+`radix-off-triton` looked equal to baseline there. The 120-turn session is where
+the cost shows.
 
-`--disable-radix-cache` vs on, **with thinking on**, 120 turns. Speed *and*
-reliability. Current evidence with the cache **on** and the Mamba guard in
-place: 0 invalid tool calls across ~200 tool turns, correct 32k cached-resend
-needle, cache hit 95–99%. This step is about what we give up by turning it off,
-and whether the guard is load-bearing.
+### Step 13 — `--enable-gdn-replayssm-spec` — **DONE, ADOPTED**
 
-### Step 13 — Unbundle whatever won — **TODO**
-
-Pack A taught this: never ship a bundle. Any winning multi-flag config from
-Step 11 gets its components measured one at a time before it reaches
-`serve.sh` defaults.
++7.6% code decode, agentic decode 51.7 vs 49.6, `spec_accept_length`
+3.80 → 3.95, 12/12 quality, same KV, 2.1 GiB less GPU. In `serve.sh` defaults.
 
 ### Step 14 — 512k optional — **TODO**
 
@@ -234,30 +226,25 @@ Step 11 gets its components measured one at a time before it reaches
 CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
 ```
 
-plus Qwen static YaRN (`factor=4.0`, `original_max_position_embeddings=262144`),
-layered on whatever `--mamba-full-memory-ratio` frees. Pass: boots + 8k needle
-still works + a ~40k needle. Do **not** make it the default even if it boots.
+plus Qwen static YaRN. **Retest `--mamba-full-memory-ratio 0.3` here** — this is
+the only regime where it can pay off, since memory rather than
+`--max-total-tokens` becomes the binding constraint. Do not make 512k default.
 
 ### Step 15 — Vision off — **TODO**
 
-One boot with `--language-only` purely to report both numbers, then **revert**.
-Vision stays on in the shipped recipe.
+One boot with `--language-only`, report both numbers, then revert. Vision stays.
 
-### Step 16 — vLLM bake-off — **NOT PLANNED, with a reason**
+### Step 16 — vLLM — **NOT PLANNED**
 
-vLLM on sm_121 needs `--no-enable-prefix-caching` (GDN CUBLAS bug). Prefix
-caching is what carries this use case: 99.0% hit and 20.6× warm-prefill
-speedup over 120 turns, against a vLLM decode number reported at ~25–28 tok/s
-versus our 38.6. Trading the cache away to chase a slower decode loses on the
-metric that matters. If it is never run, `RESEARCH_LOG.md` says **untested** —
-it does not imply a comparison was made.
+Needs `--no-enable-prefix-caching` on sm_121. Prefix caching is what carries this
+use case (99.0% hit, 21× warm prefill). Recorded as **untested**, not compared.
 
-### Step 17 — Final recipe
+### Step 17 — Final recipe — **TODO**
 
-Fold winners into `scripts/serve.sh` defaults + README tables: decode thinking
-on **and** off, agentic 120-turn bands, prefix-cache TTFT, needles, BFCL
-(corrected), GSM8K, vision on/off. Optional `CONTEXT=524288` documented, not
-default. Last commit: `Ship measured one-GB10 Flash-Next recipe`.
+`serve.sh` defaults are already updated with `--enable-gdn-replayssm-spec`.
+Remaining: rewrite the README Measured table with the new numbers (decode
+thinking on/off, agentic 120-turn bands both modes, needles, prefix-cache TTFT,
+BFCL single-turn 72.5%, GSM8K 19/20, vision on/off) and the dead-end list.
 
 ## Skip list (intentional)
 
