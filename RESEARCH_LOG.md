@@ -328,3 +328,70 @@ result, it is a cache-residency result, and mem-fraction is the knob.
 Graph capture also walks the stock decode batch-size ladder — 51 sizes up to
 **bs 256** — while `--max-running-requests` is 4. That is capture time and
 captured-graph memory spent on batch sizes this recipe can never reach.
+
+---
+
+## Step 3e / Step 4 — Baseline numbers (2026-08-28)
+
+Committed `serve.sh` defaults: mem-frac 0.95, prefill 4096, max-running 4, MTP
+3/1/4, 262k, decode `trtllm_mha`, prefill `triton`, vision on. Results under
+`results/baseline/`.
+
+### Quality — 12/12 pass
+
+math 204 · tool call emitted · generated code executes to 42 · fact planted at
+turn 1 recalled at turn 4 · **vision `Red` in 0.57 s** (the multimodal tower is
+live, not a stub).
+
+### Decode (n=3 after warmup, 400 max tokens, t=0.7)
+
+| | median tok/s | range |
+| --- | ---: | --- |
+| code EN, thinking **off** | **31.2** | 26.1–32.3 |
+| prose ES, thinking **off** | 16.5 | 16.0–19.7 |
+| code EN, thinking **on** | 24.8 | 23.0–30.5 |
+| prose ES, thinking **on** | 19.1 | 18.1–20.1 |
+
+**The README's 40.2 tok/s does not reproduce.** Same flags, 31.2 median. The two
+candidates are (a) the newer image digest — the 40.2 was measured before this
+pull — and (b) the 7 GiB page cache in front of a 47.7 GiB table. Step 5 tests
+(b) directly; if mem-frac does not close the gap, (a) is the remaining suspect
+and the old digest is worth one boot.
+
+### Long context
+
+| | |
+| --- | ---: |
+| needle 8k | **PASS**, TTFT 5.37 s, 5885 prompt tokens |
+| needle 32k | **PASS**, TTFT 10.98 s, 23555 prompt tokens (~2.1k tok/s prefill) |
+| prefix-cache resend 8k | 5.37 s → **0.88 s** (6.1×) |
+| prefix-cache resend 32k | 10.98 s → **0.83 s** (13.2×) |
+
+### 40-turn agentic session (tools, thinking off)
+
+| turns | median TTFT | median cache hit | median ctx |
+| --- | ---: | ---: | ---: |
+| 1–13 | 1.58 s | 90.2% | 1071 |
+| 14–26 | 1.57 s | 95.5% | 2439 |
+| 27–40 | 1.55 s | **97.3%** | 3869 |
+
+39/40 turns emitted a tool call, **0 invalid tool calls**, and the fact planted at
+turn 3 was recalled correctly at turn 40. TTFT is flat as context grows — the
+radix cache is doing its job on the agentic resend pattern.
+
+### Server counters
+
+`sglang:spec_accept_length` **3.74** out of a 4-token draft — MTP 3/1/4 is
+accepting almost everything, so there is little headroom in raising draft depth
+and the QSA ring-width-8 path stays skipped. `sglang:cache_hit_rate` 0.972.
+
+### Client-facing findings (Step 4, no restart)
+
+- `chat_template_kwargs.enable_thinking=false` **works**: 3 tokens / 0.7 s versus
+  ~60 tokens / 2–4 s with thinking on, same correct answer.
+- **`reasoning_effort` is inert on this build.** low / medium / xhigh produced
+  59 / 71 / 64 completion tokens as a template kwarg and 59 / 66 as a top-level
+  OpenAI field — no ordering, no trend. The template auto-detect agrees
+  (`effort_kwarg=None`). Callers should not expect it to do anything; use
+  `enable_thinking` instead.
+- `reasoning_tokens` is always 0 in `usage`; reasoning is billed as content.

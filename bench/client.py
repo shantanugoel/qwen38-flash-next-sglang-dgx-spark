@@ -153,9 +153,12 @@ def chat_stream(
                     delta = ch.get("delta") or {}
                     piece = delta.get("content") or ""
                     think = delta.get("reasoning_content") or ""
-                    if delta.get("tool_calls"):
-                        tool_calls.extend(delta["tool_calls"])
-                    if (piece or think) and ttft is None:
+                    tcs = delta.get("tool_calls")
+                    if tcs:
+                        tool_calls.extend(tcs)
+                    # A pure tool call streams no content, so time the first
+                    # delta of any kind or TTFT collapses onto the total.
+                    if (piece or think or tcs) and ttft is None:
                         ttft = time.perf_counter() - t0
                     content.append(piece)
                     reasoning.append(think)
@@ -169,7 +172,7 @@ def chat_stream(
     pt = usage.get("prompt_tokens") or 0
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
     ttft = ttft if ttft is not None else total
-    dec_window = max(total - ttft, 1e-6)
+    dec_window = max(total - ttft, 1e-3)
     return {
         "seconds": total,
         "ttft_s": ttft,
