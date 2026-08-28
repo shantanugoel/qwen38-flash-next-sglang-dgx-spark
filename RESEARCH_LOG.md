@@ -933,3 +933,56 @@ CONTEXT=262144 MAX_TOTAL=524288 MEMFRAC=0.82 --mamba-full-memory-ratio=0.3
 i.e. keep the full 262k context and KV request, take the memory back from the
 SSM pool and mem-fraction, and see whether the agentic gain survives with a
 usable KV budget. **Not yet run — this is the highest-value open lead.**
+
+---
+
+## Step 15 — Vision on/off — **not achieved**, and a corrected vision test (2026-08-28)
+
+### The old vision smoke test was unsound
+
+It rendered a solid red square and asked for the dominant colour. A text-only
+server passes that by guessing "Red". Every earlier "vision 12/12" in this log
+therefore proved **nothing** about the multimodal tower, and the claim in the
+Step 3e entry that it showed the tower was "live, not a stub" was unsupported.
+
+Replaced with a four-quadrant image (red / yellow / green / blue) asking for one
+named quadrant — not guessable from the prompt.
+
+### `--language-only` does not disable vision on this build
+
+The corrected test passes on a server booted with `--language-only`
+(`language_only=True` confirmed in `server_args`), and all four quadrants are
+read correctly:
+
+| asked | expected | got |
+| --- | --- | --- |
+| TOP-LEFT | red | `Red` |
+| TOP-RIGHT | yellow | `Yellow` |
+| BOTTOM-LEFT | green | `Green` |
+| BOTTOM-RIGHT | blue | `Blue` |
+
+Four correct spatial answers is not guessing. **The flag does not remove the
+tower from a single-process server** — it is for *encoder disaggregation*
+(`--encoder-urls`, `--encoder-transfer-backend`), i.e. handing the encoder to a
+separate service. With no encoder service configured, the local path still runs.
+
+That also explains the "savings": GPU resident 101193 MiB with `--language-only`
+versus 101282 MiB without — **89 MiB, 0.09%** — and an identical 524288 KV
+budget. Nothing was switched off.
+
+| | vision "off" (`--language-only`) | vision on |
+| --- | ---: | ---: |
+| GPU resident | 101193 MiB | 101282 MiB |
+| `max_total_num_tokens` | 524288 | 524288 |
+| quality | 12/12 | 12/12 |
+| decode code, thinking off | 40.98 | 41.49 |
+
+**Conclusion (Step 15): the vision on/off comparison was not achieved.** The
+premise of the step — that `--language-only` frees text-only headroom, taken from
+hashd1ve's notes — does not hold on this image. A genuine comparison would need
+a checkpoint without the vision tower, or a disaggregated encoder deployment.
+
+**The useful result is the opposite one:** vision demonstrably works on the
+shipped recipe, now proven by a test that cannot be passed blind. Keeping it
+costs at most 89 MiB and no KV, so there was never a headroom argument for
+turning it off.

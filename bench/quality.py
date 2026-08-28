@@ -223,6 +223,13 @@ def effort_sweep() -> list[dict]:
 
 
 def vision_smoke() -> dict:
+    """Four coloured quadrants; ask for one specific quadrant.
+
+    An earlier version showed a solid red square and asked for the dominant
+    colour. A text-only server (`--language-only`) passed it by guessing "Red",
+    so it proved nothing. This asks for the **top-right** quadrant of a
+    four-colour image, which cannot be guessed from the prompt.
+    """
     import base64
     import struct
     import zlib
@@ -231,11 +238,17 @@ def vision_smoke() -> dict:
         crc = zlib.crc32(tag + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
-    size = 112
-    raw = b"".join(b"\x00" + (b"\xff\x00\x00" * size) for _ in range(size))
+    n = 112  # half-width; full image is 2n x 2n
+    tl, tr = (255, 0, 0), (255, 255, 0)      # red,   yellow
+    bl, br = (0, 128, 0), (0, 0, 255)        # green, blue
+    rows = []
+    for y in range(2 * n):
+        left, right = (tl, tr) if y < n else (bl, br)
+        rows.append(b"\x00" + bytes(left) * n + bytes(right) * n)
+    raw = b"".join(rows)
     png = (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 2 * n, 2 * n, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(raw, 9))
         + chunk(b"IEND", b"")
     )
@@ -248,7 +261,11 @@ def vision_smoke() -> dict:
                     {"type": "image_url", "image_url": {"url": uri}},
                     {
                         "type": "text",
-                        "text": "What is the dominant color of this image? Reply with one word.",
+                        "text": (
+                            "This image is split into four coloured quadrants. "
+                            "What colour is the TOP-RIGHT quadrant? "
+                            "Reply with one word."
+                        ),
                     },
                 ],
             }
@@ -258,11 +275,11 @@ def vision_smoke() -> dict:
         thinking=False,
     )
     text = (r["content"] or r["reasoning"]).lower()
-    passed = "red" in text
+    passed = "yellow" in text
     return ok(
-        "vision_color",
+        "vision_quadrant",
         passed,
-        f"content={r['content']!r} sec={r['seconds']:.2f}",
+        f"want=yellow content={r['content']!r} sec={r['seconds']:.2f}",
         {"seconds": r["seconds"]},
     )
 
