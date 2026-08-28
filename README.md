@@ -140,6 +140,10 @@ context, clock-capped GB10. Every number below is from `bench/` in this repo.
 | 41–80 | 0.58 s | 41.7 tok/s | 98.4% | 7.1k |
 | 81–120 | 0.57 s | 45.1 tok/s | **99.0%** | 11.8k |
 
+Repeated 40-turn runs of the shipped config land at 48–52 tok/s decode,
+0.56–0.60 s TTFT and 97.3–97.5% cache hit, with **0 invalid tool calls** every
+time.
+
 **TTFT is flat as context grows.** 119 tool turns, **0 invalid tool calls**, and a
 fact planted at turn 3 recalled correctly at turn 120.
 
@@ -151,10 +155,17 @@ turns emit a tool call** versus 119 with thinking off. See *Client notes*.
 
 | | thinking off | thinking on |
 | --- | ---: | ---: |
-| code (EN) | **41.5 tok/s** | 32.5 tok/s |
-| prose (ES) | 21.4 tok/s | 24.6 tok/s |
+| code (EN) | **~40 tok/s** (39.3 / 40.4 / 41.5 over three runs) | ~32 tok/s |
+| prose (ES) | ~22 tok/s | ~26 tok/s |
 
-`spec_accept_length` **3.95 / 4.0** — MTP drafts are accepted almost every step.
+Run-to-run spread on this box is roughly ±5%, so single decode figures are not
+meaningful to one decimal place. The baseline (without
+`--enable-gdn-replayssm-spec`) measured 38.3 / 38.6 / 39.0 over three runs, so the
+flag is worth **~4–5%** on code decode, not the 7.6% a best-vs-best comparison
+would suggest.
+
+`spec_accept_length` is the more stable evidence: **3.80 without the flag,
+3.93–3.95 with it**, out of a 4-token draft, consistent across every run.
 
 ### Long context
 
