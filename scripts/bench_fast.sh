@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Fast bench suite for one loaded config. Never run in the foreground.
+#
+#   TAG=baseline nohup ./scripts/bench_fast.sh > results/fast-baseline.log 2>&1 &
+#
+# Writes results/<TAG>/{decode,quality,longctx}.json and prints RESULT lines.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TAG="${TAG:-run}"
+OUTDIR="${ROOT}/results/${TAG}"
+mkdir -p "${OUTDIR}"
+export BASE="${BASE:-http://127.0.0.1:30000}"
+export MODEL="${MODEL:-qwen38-flash-next-nvfp4-mtp}"
+
+echo "=== ${TAG} $(date -u +%FT%TZ) ==="
+"${SCRIPT_DIR}/smoke.sh"
+
+echo "=== quality (math/tools/code/multiturn/vision + effort) ==="
+EFFORT=1 OUT="${OUTDIR}/quality.json" python3 "${ROOT}/bench/quality.py" || true
+
+echo "=== decode (thinking off + on) ==="
+N="${N:-3}" THINKING=both OUT="${OUTDIR}/decode.json" python3 "${ROOT}/bench/decode.py" || true
+
+echo "=== longctx (8k/32k needle + prefix cache) ==="
+SIZES="${SIZES:-8k,32k}" OUT="${OUTDIR}/longctx.json" python3 "${ROOT}/bench/longctx.py" || true
+
+echo "=== server metrics ==="
+python3 - <<'PY'
+import sys, json
+sys.path.insert(0, "bench")
+from client import server_metrics
+print("RESULT metrics:", json.dumps(server_metrics()))
+PY
+
+echo "RESULT bench_fast: ${TAG} done"

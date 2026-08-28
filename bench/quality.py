@@ -216,8 +216,59 @@ def effort_sweep() -> list[dict]:
     return rows
 
 
+def vision_smoke() -> dict:
+    import base64
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    size = 112
+    raw = b"".join(b"\x00" + (b"\xff\x00\x00" * size) for _ in range(size))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+    uri = "data:image/png;base64," + base64.b64encode(png).decode()
+    r = chat(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": uri}},
+                    {
+                        "type": "text",
+                        "text": "What is the dominant color of this image? Reply with one word.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=64,
+        temperature=0,
+        thinking=False,
+    )
+    text = (r["content"] or r["reasoning"]).lower()
+    passed = "red" in text
+    return ok(
+        "vision_color",
+        passed,
+        f"content={r['content']!r} sec={r['seconds']:.2f}",
+        {"seconds": r["seconds"]},
+    )
+
+
 def main() -> int:
-    rows = [math_smoke(), tool_smoke(), code_exec_smoke(), multiturn_fact()]
+    rows = [
+        math_smoke(),
+        tool_smoke(),
+        code_exec_smoke(),
+        multiturn_fact(),
+        vision_smoke(),
+    ]
     if EFFORT:
         rows.extend(effort_sweep())
     failed = [r for r in rows if not r["pass"]]

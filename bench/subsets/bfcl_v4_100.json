@@ -1,0 +1,14 @@
+{
+  "name": "bfcl-v4-100",
+  "seed": 42,
+  "note": "Fixed 100-case subset of gorilla-llm/Berkeley-Function-Calling-Leaderboard (BFCL V3 files, used by V4 leaderboard AST/multi-turn/irrelevance splits). Hallucination = live_irrelevance (must not call a tool). Indices are first N after a stable sort by id.",
+  "source": "https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+  "splits": {
+    "simple": {"file": "BFCL_v3_simple.json", "n": 30, "expect": "tool"},
+    "multiple": {"file": "BFCL_v3_multiple.json", "n": 15, "expect": "tool"},
+    "parallel": {"file": "BFCL_v3_parallel.json", "n": 15, "expect": "tool"},
+    "multi_turn_base": {"file": "BFCL_v3_multi_turn_base.json", "n": 20, "expect": "multi_turn"},
+    "irrelevance": {"file": "BFCL_v3_irrelevance.json", "n": 10, "expect": "no_tool"},
+    "live_irrelevance": {"file": "BFCL_v3_live_irrelevance.json", "n": 10, "expect": "no_tool"}
+  }
+}

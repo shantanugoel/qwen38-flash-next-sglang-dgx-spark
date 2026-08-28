@@ -36,6 +36,9 @@ silence while the PLE mmap fills — that is **not** hung. Poll `/health` every
 - Do not commit weights, PLE backing files, `results/`, logs, or `.env`.
 - Default recipe: thinking **on**; caller may set
   `chat_template_kwargs.enable_thinking=false`.
+- Keep **vision**. Do not pass `--language-only` or `--language-model-only`.
+  Those skip or disaggregate the multimodal encoder. Hashd1ve used
+  `--language-only` for text-only KV headroom; we do not.
 - 262k is the default context; 512k is optional and must not replace it
   unless it actually works.
 - Runtime-only env (not committed): reuse the existing mmap with

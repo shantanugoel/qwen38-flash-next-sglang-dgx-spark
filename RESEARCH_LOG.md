@@ -96,9 +96,9 @@ uncap, second NVFP4 download, 1M context, editing llama-swap.
 
 **Conclusion (Step 0):** Stay on RadixArk NVFP4 + mmap PLE + QSA SM120 + MTP
 3/1/4 as the starting stack. Pull the newer cookbook image. Biggest likely
-wins for *this* use case are `--language-only`, a less greedy mem/prefill
-pack for 100–150 turn 262k sessions, thinking/effort defaults, and a honest
-vLLM TTFT comparison — not another kernel flag.
+wins: a less greedy mem/prefill pack, CUDA-graph max-bs (stock captures to
+256), thinking/effort defaults, and a honest vLLM TTFT comparison. **Do not**
+skip vision (`--language-only` / `--language-model-only`).
 
 ---
 
@@ -127,3 +127,87 @@ official image in the background, then baseline boot.
 fall back to the Felliks disk-cache image.
 
 ---
+
+## Step 3 — Baseline boot, and a boot-time bug worth fixing first (2026-08-28)
+
+First baseline boot with the committed `serve.sh` flags started 06:47 UTC and was
+still not serving 27 min later. It was not hung — `/proc/<sched>/io` showed
+`read_bytes` climbing ~30 MB/s and `write_bytes` climbing ~0.65 GB/min. The write
+is the giveaway: SGLang runs the generic `VocabParallelEmbedding.weight_loader` on
+the PLE parameter every boot, so the whole **47.7 GiB table is re-copied from the
+checkpoint into the mmap on every single restart**, even though the mmap already
+holds exactly that table from the previous boot. Extrapolated cost of that copy
+alone: **45–60 min per boot**.
+
+Raw disk is not the limit — `dd iflag=direct bs=8M` on a checkpoint blob reads at
+**8.7 GB/s**. The copy is slow because it is a read-modify-write through the page
+cache with almost no page cache available (see below).
+
+### Fix: `patches/ple_reuse.py`
+
+Adds a verified fast path to `Qwen4ExpPinnedHostEmbedding.weight_loader`: sample
+8192 random rows (plus first and last) of the mmap and of the checkpoint tensor,
+and skip the copy only if every sampled row is byte-identical. A stale, truncated
+or wrong-revision file fails the sample and falls back to the full copy, so the
+fast path cannot serve wrong weights. `SGLANG_QWEN4_PLE_REUSE=0` forces the copy.
+Wired into `prepare.sh` after `ple_mmap.py`, with an assert.
+
+### Where the 121 GiB actually goes at `--mem-fraction-static 0.95`
+
+`nvidia-smi --query-compute-apps` during load, on this UMA part:
+
+| Consumer | Size |
+| --- | ---: |
+| SGLang scheduler (weights + pools), still growing | 82.8 GiB |
+| page cache (all of it, incl. the PLE mmap's hot rows) | ~26 GiB |
+| anon + slab + rest | ~5 GiB |
+| **free** | **~7 GiB** |
+
+The PLE table is 47.7 GiB of pure random access and it lives *in the page cache*.
+At mem-frac 0.95 there is not enough page cache to hold a useful fraction of it,
+so the loader (and later every decode step) sits in `D` state on
+`folio_wait_bit_common` reclaiming pages. This reframes Step 5: dropping mem-frac
+is not only a stability knob, it is a **PLE residency** knob and therefore a
+decode-speed knob. Measure 0.95 vs 0.85 with that in mind.
+
+### Harness additions this step
+
+- `bench/client.py`: `chat_stream()` (TTFT, prefill tok/s, decode tok/s, cached
+  tokens, cache-hit %) and `server_metrics()` (Prometheus scrape).
+- `bench/bfcl.py`: the fixed 100-case BFCL subset. AST scoring for
+  simple/multiple/parallel against `possible_answer`, no-tool scoring for
+  irrelevance/live_irrelevance, and **relaxed** per-turn function-name scoring for
+  `multi_turn_base` (the real BFCL multi-turn needs their stateful sandbox;
+  we score tool *selection* across turns instead and label it as such).
+- `scripts/bench_tb.sh`: Terminal-Bench 2.1, fixed 8-task subset, `terminus-2`,
+  `--n-attempts 1`, pointed at the local OpenAI-compatible endpoint.
+- `scripts/bench_fast.sh`: one background job that runs smoke + quality + decode
+  + longctx for a tagged config.
+- Vision smoke image raised from 8×8 to 112×112 (Qwen VL patching needs ≥28 px).
+
+### Knob survey (616 `sglang serve` flags on this image)
+
+Beyond the Step 0 list, these are new candidates worth a boot for a 100–150 turn
+agentic session, in expected-value order:
+
+1. `--cuda-graph-max-bs-decode` — stock captures decode graphs up to bs 256 while
+   we cap at `--max-running-requests 4`. Wasted capture time and memory that could
+   be PLE page cache.
+2. `--strip-thinking-cache` — drops reasoning from the cached prefix; directly
+   targets prefix-cache hit rate across long tool-calling sessions.
+3. `--enable-gdn-replayssm-spec` / `--enable-linear-replayssm-spec` — upstream
+   handling of GDN/linear-attention state under speculative rewind. This is the
+   exact failure Death-By-Tokens patched around by hand.
+4. `--radix-eviction-policy {lru,lfu,slru,priority}` — LFU/SLRU should retain the
+   system prompt + tool definitions across 150 turns better than LRU.
+5. `--speculative-adaptive` (+ `--speculative-accept-threshold-*`) — adaptive MTP
+   depth instead of a fixed 3/1/4.
+6. `--cuda-graph-backend-prefill tc_piecewise` — prefill graphs where a full
+   capture cannot work; agentic TTFT.
+7. `--weight-loader-drop-cache-after-load` — frees the checkpoint's page cache
+   after load, which is exactly the cache the PLE table wants.
+8. `--mamba-backend flashinfer` vs `triton`, `--linear-attn-prefill-backend`.
+
+Not pursued: `--enable-hierarchical-cache` / hicache (offloads KV to the *same*
+UMA pool), `--kv-cache-dtype fp8` (QSA wants bf16 KV), disaggregation and
+context-parallel flags (single box), `--enable-unified-memory` (already UMA).

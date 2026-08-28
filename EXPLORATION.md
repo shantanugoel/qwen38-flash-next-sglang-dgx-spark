@@ -10,6 +10,7 @@ Constraints (locked 2026-08-28):
 - Thinking **on by default**; caller can disable via `chat_template_kwargs.enable_thinking`.
 - Do **not** edit `~/ai`. Unload llama-swap before occupying the GPU. No sudo.
 - Treat **vLLM as a real contender** if it beats this SGLang path on the same box.
+- Keep **vision**. Never `--language-only` / `--language-model-only`.
 - Look at newer NVFP4 checkpoints / images, but do not download a second 135 GB
   pack unless research shows a quality or fit win.
 
@@ -52,6 +53,7 @@ Community map (full notes in `RESEARCH_LOG.md`):
 3. Tool-call smoke: one weather-style function, parser must emit `tool_calls`.
 4. Code smoke: write a tiny Python function; we execute it.
 5. Factual + multi-turn: plant a fact in turn 1, retrieve in turn 4.
+6. Vision smoke: one image + short question (tower must stay loaded).
 
 **Once per promising config** (longer):
 
@@ -144,14 +146,14 @@ Commit: log only, unless we add a documented client snippet to README later.
 Background + poll (`AGENTS.md`): stop + `serve.sh` detached, then poll `/health`.
 
 One restart. Combined because each is a 10–15 min boot and they target the same
-long-horizon failure mode (UMA starvation + vision weights we do not need):
+long-horizon failure mode (UMA starvation). **Vision stays on** — do not add
+`--language-only` or `--language-model-only`.
 
-- `--language-only`
 - `--mem-fraction-static 0.85` (0.95 left ~6–8 GiB; hashd1ve hung the box on
   sequential long prefills at 0.85 even)
 - `--chunked-prefill-size 2048` (activation vs throughput)
 - `--max-running-requests 2` (agentic is 1 stream + maybe a retry)
-- keep MTP 3/1/4, graphs, trtllm_mha decode
+- keep MTP 3/1/4, graphs, trtllm_mha decode, multimodal tower
 
 If quality holds and longctx 32k is stable, this becomes the new default skeleton.
 

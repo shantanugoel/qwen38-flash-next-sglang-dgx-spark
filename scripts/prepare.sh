@@ -34,6 +34,7 @@ extract "${qwen4_path}" "${QWEN4_BACKEND}"
 extract "${qsa_path}" "${QSA_BACKEND}"
 
 python3 "${ROOT}/patches/ple_mmap.py" "${QWEN4_BACKEND}"
+python3 "${ROOT}/patches/ple_reuse.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/qsa_drop_sm121_sdpa.py" "${QSA_BACKEND}"
 python3 "${ROOT}/patches/qsa_trtllm_sm120.py" "${QSA_BACKEND}"
 python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}"
@@ -44,6 +45,7 @@ qwen4 = Path("${QWEN4_BACKEND}").read_text()
 qsa = Path("${QSA_BACKEND}").read_text()
 assert "_alloc_ple_table" in qwen4, "PLE mmap helper missing"
 assert "_alloc_ple_table(source_weight.shape" in qwen4
+assert "_ple_reuse_ok" in qwen4, "PLE mmap reuse fast path missing"
 assert "if is_sm121():" not in qsa, "SM121 SDPA intercept still present"
 assert "is_sm100_supported() or is_sm120_supported()" in qsa, "sm_120 gate missing"
 print("patches ok")
