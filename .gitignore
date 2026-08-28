@@ -1,6 +1,9 @@
 /.env
 /build/
 /data/
+/results/
 __pycache__/
 *.pyc
 *.log
+*.jsonl
+bench/__pycache__/
