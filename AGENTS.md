@@ -44,4 +44,14 @@ silence while the PLE mmap fills — that is **not** hung. Poll `/health` every
 - Runtime-only env (not committed): reuse the existing mmap with
   `PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap` and
   `HF_CACHE=$HF_HOME`.
+- The PLE mmap is **reused** across boots (`patches/ple_reuse.py`). A boot is
+  ~10 min, not ~60. If a boot suddenly takes an hour again, check the log for
+  `PLE table: N/N shards already on disk` — if it is missing, the patch did not
+  apply. The table is written by `copy_ple_rows_to_tp_embedding` in
+  `load_weights`, **not** by `param.weight_loader`; do not "fix" it there.
+- **Terminal-Bench cannot run on this box**: TB 2.x task images are amd64-only
+  and there is no qemu binfmt handler. `scripts/bench_tb.sh` is correct and runs
+  from an x86 host against this server. Never report a TB score measured here.
+- One experiment = one `nohup TAG=… ./scripts/run_config.sh &`. It restarts,
+  waits for `/health` with a timeout, and runs the fast bench suite.
 - After each plan step: append `RESEARCH_LOG.md`, commit scripts/docs only.
