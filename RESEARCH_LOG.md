@@ -900,3 +900,36 @@ that 512k works, and will not be reported as such.
 **Conclusion (Step 14): 262k stays the default and the only supported context.
 512k is not achieved.** The blocker is not memory tuning — it is that static YaRN
 as published does not compose with this checkpoint's sectioned mrope.
+
+### Step 14 addendum — the 512k run hid a real agentic lead
+
+The 512k config is rejected on context, but its **agentic numbers are the best
+measured anywhere in this exploration**:
+
+| | shipped 262k (gdn) | 512k attempt |
+| --- | ---: | ---: |
+| agentic decode (bands) | 49.8 / 50.8 / 51.7 | **56.2 / 59.8 / 59.6** |
+| agentic TTFT (bands) | 0.608 / 0.569 / 0.566 | 0.601 / 0.547 / 0.557 |
+| 40-turn wall clock | 55.2 s | **42.1 s** |
+| needle 40k | not run | **PASS**, 24.3× resend speedup |
+| page cache | 10 GiB | **18 GiB** |
+| GPU resident | 101.3 GiB | 89.3 GiB |
+| `max_total_num_tokens` | 524288 | 201984 |
+
+**+15–20% agentic decode.** The plausible mechanism is the one this log declared
+dead in Step 5 and should now be re-opened: **page cache for the PLE table.**
+18 GiB of cache against a 47.7 GiB random-access table versus 10 GiB. Step 5
+tested `MEMFRAC=0.85` and got only 11 GiB of cache and no gain; this run reaches
+18 GiB and gains. That looks like a threshold rather than a linear effect, which
+is why the earlier test missed it.
+
+**Confounded** with `MAX_RUNNING=1`, `PREFILL=1024`, `CONTEXT=524288` and
+`--mamba-full-memory-ratio=0.3`. The isolating experiment is:
+
+```
+CONTEXT=262144 MAX_TOTAL=524288 MEMFRAC=0.82 --mamba-full-memory-ratio=0.3
+```
+
+i.e. keep the full 262k context and KV request, take the memory back from the
+SSM pool and mem-fraction, and see whether the agentic gain survives with a
+usable KV budget. **Not yet run — this is the highest-value open lead.**
