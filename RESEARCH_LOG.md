@@ -143,14 +143,35 @@ Raw disk is not the limit — `dd iflag=direct bs=8M` on a checkpoint blob reads
 **8.7 GB/s**. The copy is slow because it is a read-modify-write through the page
 cache with almost no page cache available (see below).
 
-### Fix: `patches/ple_reuse.py`
+### Fix: `patches/ple_reuse.py` (and two wrong versions of it first)
 
-Adds a verified fast path to `Qwen4ExpPinnedHostEmbedding.weight_loader`: sample
-8192 random rows (plus first and last) of the mmap and of the checkpoint tensor,
-and skip the copy only if every sampled row is byte-identical. A stale, truncated
-or wrong-revision file fails the sample and falls back to the full copy, so the
-fast path cannot serve wrong weights. `SGLANG_QWEN4_PLE_REUSE=0` forces the copy.
-Wired into `prepare.sh` after `ple_mmap.py`, with an assert.
+The obvious hook is wrong. `Qwen4ExpPinnedHostEmbedding` registers the mmap as a
+`nn.Parameter` and sets `cpu_weight.weight_loader = self.weight_loader`, so
+overriding that method looks like the right place — but the PLE table never goes
+through it. `Qwen4ExpVLForConditionalGeneration.load_weights` has a dedicated
+`load_qwen4_exp_ple_shard` branch that matches
+`…ngram_embedding.shard_<N>.weight` and writes the rows with
+`copy_ple_rows_to_tp_embedding`, **512 shards**, bypassing `param.weight_loader`
+entirely. Two boots were spent re-copying the table in silence before the tell
+showed up: `write_bytes` on the scheduler climbing while the override logged
+nothing at all. (A first version was also shape-assuming and would have declined
+silently even on the right hook. Every decline now logs.)
+
+The shipped patch wraps the shard copy itself:
+
+```python
+if _ple_shard_matches(dst, src):   # random 4 KiB byte windows, both sides
+    skipped += 1
+else:
+    dst.copy_(src)
+```
+
+Per shard rather than per table is both cheaper to verify (~34 windows over
+~100 MB) and safer — a shard that does not match is copied on its own while the
+rest are skipped, so a partially written or wrong-revision file cannot serve
+wrong weights. `SGLANG_QWEN4_PLE_REUSE=0` forces the full copy;
+`SGLANG_QWEN4_PLE_REUSE_WINDOWS` sets the sample count. The count of skipped vs
+copied shards is logged once at the end of `load_weights`.
 
 ### Where the 121 GiB actually goes at `--mem-fraction-static 0.95`
 
