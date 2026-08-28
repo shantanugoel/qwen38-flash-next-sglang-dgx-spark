@@ -297,3 +297,34 @@ the data, so this does not matter, but it is why the log says 128/128.
 boot on a new machine still writes the table once. This is the single largest
 change in the recipe so far and it is a pure boot-time win — no runtime
 behaviour is altered, since a mismatched shard is still copied.
+
+---
+
+## Step 3d — Baseline boot facts (2026-08-28)
+
+Boot 4, committed `serve.sh` defaults, existing PLE mmap.
+
+| | |
+| --- | ---: |
+| `docker run` → `/health` 200 | **9m47s** (07:40:51 → 07:50:38) |
+| target model weight load | 6m19s |
+| MTP draft weight load | 1m26s (online NVFP4 quant of the draft MoE) |
+| KV cache | 524288 tokens, bf16, K 6.00 GB + V 6.00 GB (+0.5/0.5 draft) |
+| `max_total_num_tokens` | 524288 |
+
+Host memory once serving, `--mem-fraction-static 0.95`:
+
+| | |
+| --- | ---: |
+| SGLang scheduler (nvidia-smi compute-apps) | **103.6 GiB** |
+| page cache (`buff/cache`) | **7 GiB** |
+| free | **1 GiB** |
+
+That is the number to keep in mind for Step 5: the PLE table is **47.7 GiB of
+random access served out of a 7 GiB page cache**. Every gather that misses is an
+NVMe read on the decode path. Decode tok/s at 0.95 is therefore not a kernel
+result, it is a cache-residency result, and mem-fraction is the knob.
+
+Graph capture also walks the stock decode batch-size ladder — 51 sizes up to
+**bs 256** — while `--max-running-requests` is 4. That is capture time and
+captured-graph memory spent on batch sizes this recipe can never reach.
