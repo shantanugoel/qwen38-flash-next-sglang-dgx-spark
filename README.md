@@ -65,13 +65,15 @@ Second and later boots are **~10 min** end to end. Set
 
 | Env | Default | Why you would change it |
 | --- | --- | --- |
-| `MEMFRAC` | see below | Lower hands UMA back to the page cache the PLE table is read from |
-| `PREFILL` | see below | Chunked prefill size |
-| `MAX_RUNNING` | see below | Concurrent requests |
+| `MEMFRAC` | `0.95` | Lower hands UMA back to the page cache the PLE table is read from |
+| `PREFILL` | `4096` | Chunked prefill size |
+| `MAX_RUNNING` | `4` | Concurrent requests |
 | `CONTEXT` | `262144` | Native rope limit |
 | `MAX_TOTAL` | `524288` | KV token budget |
 | `SPEC_STEPS` / `SPEC_TOPK` / `SPEC_DRAFT` | `3` / `1` / `4` | MTP depth; `SPEC=off` disables |
-| `CUDA_GRAPH_MAX_BS` | see below | Stock captures decode graphs up to bs 256 |
+| `CUDA_GRAPH_MAX_BS` | unset | Stock captures decode graphs up to bs 256 |
+| `MAMBA_STRATEGY` | `extra_buffer` | Required for `page_size > 1`; guards MTP rewind vs GDN state |
+| `PAGE_SIZE` | `64` | Ignored — compressed QSA pins it to 64 |
 | `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
 
 ## Client notes
@@ -86,6 +88,12 @@ Second and later boots are **~10 min** end to end. Set
 - `usage.completion_tokens_details.reasoning_tokens` is always 0; reasoning is
   billed as content.
 - Tool calls use the `qwen3_coder` parser and come back as OpenAI `tool_calls`.
+- **Thinking on halves tool-call frequency.** Over an identical 120-turn session,
+  119/120 turns emitted a tool call with thinking off, but only **60/120** with it
+  on — the model answers in prose instead. Nothing is corrupted and recall still
+  works, but an agent loop that treats "no tool call" as a stall will feel steps
+  being dropped. Drive tool-heavy phases with `enable_thinking: false` and leave
+  thinking on for reasoning turns.
 
 ## Benchmarks
 
@@ -108,16 +116,78 @@ the task container exits 255 on platform mismatch. `scripts/bench_tb.sh` is
 correct and works from an x86 host pointed at this server over the network. No
 Terminal-Bench number in this repo was measured on a Spark.
 
-## Measured (one GB10, 2026-08-27)
+## Measured (one GB10, 2026-08-28)
 
-Single stream, MTP 3/1/4, `trtllm_mha` decode, CUDA graphs on, 262k context.
+Single stream, `RadixArk/Qwen3.8-Flash-Next-NVFP4`, MTP 3/1/4, `trtllm_mha`
+decode, `triton` prefill, CUDA graphs, radix cache on, **vision on**, 262k
+context, clock-capped GB10. Every number below is from `bench/` in this repo.
+
+### Long-horizon agentic session — what this recipe is for
+
+120 turns, one tool call per turn, growing context, `bench/agentic.py`.
+
+| turns | TTFT | decode | cache hit | context |
+| --- | ---: | ---: | ---: | ---: |
+| 1–40 | 0.55 s | 47.8 tok/s | 95.5% | 2.5k |
+| 41–80 | 0.58 s | 41.7 tok/s | 98.4% | 7.1k |
+| 81–120 | 0.57 s | 45.1 tok/s | **99.0%** | 11.8k |
+
+**TTFT is flat as context grows.** 119 tool turns, **0 invalid tool calls**, and a
+fact planted at turn 3 recalled correctly at turn 120.
+
+With **thinking on**, same session: TTFT 0.39 → 0.29 s, decode 32 → 25 tok/s,
+cache hit 99.4%, 0 invalid tool calls, late recall correct — but only **60 of 120
+turns emit a tool call** versus 119 with thinking off. See *Client notes*.
+
+### Decode
+
+| | thinking off | thinking on |
+| --- | ---: | ---: |
+| code (EN) | **41.5 tok/s** | 32.5 tok/s |
+| prose (ES) | 21.4 tok/s | 24.6 tok/s |
+
+`spec_accept_length` **3.95 / 4.0** — MTP drafts are accepted almost every step.
+
+### Long context
 
 | | |
 | --- | ---: |
-| Decode, code, thinking off | **40.2 tok/s** (median 38.8) |
-| `"12*17"` → `204` | 1.9 s warm |
-| llama.cpp GGUF (same class, no MTP / no QSA) | ~16–18 tok/s |
-| vLLM + MTP=2 on this NVFP4 | ~27 tok/s |
+| needle 8k / 32k / 40k | **PASS / PASS / PASS** |
+| TTFT 8k / 32k | 3.98 s / 10.37 s (~2.3k tok/s prefill) |
+| prefix-cache resend 8k | 3.98 s → 0.57 s (**7.0×**) |
+| prefix-cache resend 32k | 10.37 s → 0.49 s (**21.0×**) |
+
+### Quality
+
+| | |
+| --- | ---: |
+| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **12/12** |
+| GSM8K, n=20, thinking off | **19/20 (95%)** |
+| BFCL fixed subset, 80 single-turn cases | **72.5%** |
+| — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
+| — irrelevance / live_irrelevance | 80.0% / **30.0%** |
+| invalid tool calls, ~600 tool turns total | **0** |
+
+`live_irrelevance` at 30% is the one weak spot: the model reaches for a tool when
+the right move is to decline. Curated `irrelevance` is 80%, so it is the harder
+live split specifically. An agent loop that trusts every tool call it receives
+will waste steps on it.
+
+BFCL `multi_turn_base` is **not reported** — scoring it needs BFCL's stateful
+sandbox, and a mock tool backend measures the harness, not the model.
+
+### What was tried and rejected
+
+| Change | Result |
+| --- | --- |
+| `--mem-fraction-static 0.85` pack | No speed gain, **−39% KV budget**, accept 3.80 → 3.50 |
+| `--disable-radix-cache` | TTFT 0.57 s → **2.32 s and climbing** at turn 40, 32k resend 21× → 1.0×, +73% wall clock, **no reliability benefit** |
+| `--linear-attn-backend` (flashinfer / cutedsl / nvidia_kda) | **Unreachable.** Compressed QSA pins `page_size=64`, which forces `extra_buffer`, which rejects these backends. Only `--disable-radix-cache` unlocks them, and that costs far more than they give |
+| `--mamba-full-memory-ratio 0.3` | Inert at 262k — `--max-total-tokens` binds before memory does |
+| `PREFILL=8192` + graph bundle | Worst prose decode in the sweep, one quality failure, unattributed 3-flag bundle |
+| MTP depth changes | Accept length is already 3.95/4.0; no headroom |
+| **512k context** | Boots, but yields **201984 KV tokens — below the 262k default**. The published Qwen static-YaRN recipe targets a `rope_scaling` field this checkpoint does not have (it is sectioned **mrope** under `text_config.rope_parameters`), and `rope_type` stays `default` after the override. **Not achieved; 262k is the only supported context** |
+| vLLM | **Untested.** It needs `--no-enable-prefix-caching` on sm_121, and prefix caching is worth 21× warm prefill here |
 
 ## Credits
 
