@@ -33,6 +33,8 @@ OUT = os.environ.get("OUT", "")
 LIMIT = int(os.environ.get("LIMIT", "0"))
 THINKING = os.environ.get("THINKING", "off").lower() == "on"
 MAX_TOKENS = int(os.environ.get("BFCL_MAX_TOKENS", "1024"))
+# How many tool-call rounds a single multi-turn user message may take.
+MT_MAX_STEPS = int(os.environ.get("BFCL_MT_MAX_STEPS", "6"))
 
 TYPE_MAP = {
     "dict": "object",
@@ -256,52 +258,58 @@ def run_case(case, split, expect, answers, agg):
     detail = ""
 
     if expect == "multi_turn":
+        # A real agent issues one call, reads the result, then the next. BFCL's
+        # ground truth lists the whole sequence for the turn, so the model has
+        # to be allowed to loop within a turn before the turn is scored.
         gts = answers.get(case["id"], [])
         for ti, turn in enumerate(turns):
             msgs.extend(turn)
-            r = chat_stream(
-                msgs,
-                max_tokens=MAX_TOKENS,
-                temperature=0,
-                thinking=THINKING,
-                tools=tools,
-                extra={"tool_choice": "auto"},
-            )
-            agg_add(agg, r)
-            calls, bad = parse_calls(r["tool_calls"])
-            invalid.extend(bad)
-            got = {n.replace(".", "_") for n, _ in calls}
-            for n, _ in calls:
-                if n not in tool_names:
-                    invalid.append(f"unknown function {n!r}")
+            got: set[str] = set()
+            for step in range(MT_MAX_STEPS):
+                r = chat_stream(
+                    msgs,
+                    max_tokens=MAX_TOKENS,
+                    temperature=0,
+                    thinking=THINKING,
+                    tools=tools,
+                    extra={"tool_choice": "auto"},
+                )
+                agg_add(agg, r)
+                calls, bad = parse_calls(r["tool_calls"])
+                invalid.extend(bad)
+                for n, _ in calls:
+                    if n not in tool_names:
+                        invalid.append(f"unknown function {n!r}")
+                got |= {n.replace(".", "_") for n, _ in calls}
+                if not calls:
+                    msgs.append({"role": "assistant", "content": r["content"] or ""})
+                    break
+                msgs.append(
+                    {
+                        "role": "assistant",
+                        "content": r["content"] or "",
+                        "tool_calls": [
+                            {
+                                "id": f"call_{ti}_{step}_{i}",
+                                "type": "function",
+                                "function": {"name": n, "arguments": json.dumps(a)},
+                            }
+                            for i, (n, a) in enumerate(calls)
+                        ],
+                    }
+                )
+                for i, (n, _) in enumerate(calls):
+                    msgs.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": f"call_{ti}_{step}_{i}",
+                            "content": json.dumps({"status": "ok", "function": n}),
+                        }
+                    )
             want = set(gt_names(gts[ti])) if ti < len(gts) else set()
             if want and not want.issubset(got):
                 passed = False
                 detail += f"turn{ti}: want {sorted(want)} got {sorted(got)}; "
-            msgs.append(
-                {
-                    "role": "assistant",
-                    "content": r["content"] or "",
-                    "tool_calls": [
-                        {
-                            "id": f"call_{ti}_{i}",
-                            "type": "function",
-                            "function": {"name": n, "arguments": json.dumps(a)},
-                        }
-                        for i, (n, a) in enumerate(calls)
-                    ],
-                }
-                if calls
-                else {"role": "assistant", "content": r["content"] or ""}
-            )
-            for i, (n, _) in enumerate(calls):
-                msgs.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": f"call_{ti}_{i}",
-                        "content": json.dumps({"status": "ok", "function": n}),
-                    }
-                )
         return passed, detail[:300], invalid
 
     msgs = list(turns[0]) if isinstance(turns[0], list) else [turns[0]]
@@ -357,7 +365,10 @@ def main() -> int:
     }
     results = []
     t0 = time.time()
+    only = {x for x in os.environ.get("SPLITS", "").split(",") if x}
     for split, cfg in SPEC["splits"].items():
+        if only and split not in only:
+            continue
         rows = load_split(cfg["file"])
         answers = load_answers(cfg["file"])
         n = cfg["n"] if not LIMIT else min(cfg["n"], LIMIT)

@@ -655,3 +655,46 @@ the hand-rolled `extra_buffer` + `track_interval 64` workaround.
 (`--enable-gdn-replayssm-spec`), one knob deferred to the 512k step
 (`mamba-full-memory-ratio`), one rejected on correctness (the prefill bundle),
 and one experiment that turned into a structural finding about `extra_buffer`.
+
+---
+
+## Step 11e — Why the alternative GDN kernels are unreachable (2026-08-28)
+
+Three sweeps to close this, ending in the upstream source rather than a guess.
+
+1. `--linear-attn-backend={flashinfer,cutedsl,nvidia_kda}` →
+   `AssertionError: extra_buffer is not supported for
+   Qwen4ExpForConditionalGeneration; use no_buffer.`
+2. Same, with `MAMBA_STRATEGY=no_buffer` →
+   `AssertionError: no_buffer only supports page_size=1.`
+3. Same, with `PAGE_SIZE=1` → **same assertion**. The CLI showed `page_size=1`
+   and the validator still saw 64, i.e. something overrides it.
+
+`sglang/srt/arg_groups/overrides.py`:
+
+```python
+if profile is not None and profile.variant == QSA_VARIANT_COMPRESSED:
+    overrides["page_size"] = 64
+```
+
+and its docstring:
+
+> Compressed QSA additionally pins page_size=64 … its compressed cache is
+> addressed as `full_slot // compress_ratio` (the DSV4 scheme), which requires
+> page-aligned full-KV allocation … MambaRadixCache supports page_size > 1 only
+> with the mamba extra-buffer strategy, so fall back to the family default when
+> neither that **nor `--disable-radix-cache`** holds.
+
+**The chain, sourced:** compressed QSA pins `page_size=64` unconditionally and
+`--page-size` cannot override it → `MambaRadixCache` allows `page_size > 1` only
+under `extra_buffer` → `extra_buffer` rejects every non-triton
+`--linear-attn-backend`. **So the alternative GDN kernels cannot be used while
+QSA and the radix cache are both on.** This is a structural property of the
+model + recipe, not a missing-cubin problem, and not something a flag combination
+can work around.
+
+The docstring also names the one escape hatch — `--disable-radix-cache` — which
+merges this question into the radix A/B (Step 12): with the prefix cache off,
+`page_size > 1` no longer needs `extra_buffer`, so the kernels become reachable.
+That is the trade being measured there: kernel choice **or** prefix caching, not
+both.
