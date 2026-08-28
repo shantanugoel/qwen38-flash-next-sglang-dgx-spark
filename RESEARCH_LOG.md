@@ -595,3 +595,63 @@ the recipe should document, not a server flag.
 40-turn runs, radix cache **on**, cache hit 93–99%: **zero invalid tool calls,
 zero corrupted recalls.** With the Mamba guard (`extra_buffer`,
 `track_interval 64`) in place.
+
+---
+
+## Step 11 — Kernel and memory sweep (2026-08-28)
+
+`QUICK=1` per config: quality + decode only, n=3 after warmup.
+
+| config | code off | prose off | code on | prose on | quality | GPU / cache | boot |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| baseline | 38.55 | 21.99 | 32.58 | 24.73 | 12/12 | 103.4G / 7G | 617 s |
+| `--mamba-full-memory-ratio=0.3` | 38.31 | 20.70 | 31.59 | 26.20 | 12/12 | 103.4G / 6G | 557 s |
+| `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` | 40.27 | 19.34 | 32.02 | 23.08 | **11/12** | 103.4G / 7G | 587 s |
+| `--enable-gdn-replayssm-spec` | **40.42** | 21.60 | **34.76** | 25.88 | 12/12 | **101.3G / 10G** | 602 s |
+
+### `--linear-attn-backend` — cannot be tested with our recipe as it stands
+
+All three of `flashinfer`, `cutedsl`, `nvidia_kda` die in 30 s, and not for the
+reason expected:
+
+```
+AssertionError: extra_buffer is not supported for
+Qwen4ExpForConditionalGeneration; use no_buffer.
+```
+
+This is a real, undocumented coupling: **`--mamba-radix-cache-strategy
+extra_buffer` is incompatible with any non-default linear-attention backend on
+this model class.** `extra_buffer` is the Death-By-Tokens guard against MTP
+rewind corrupting GDN state, so the kernel question and the corruption question
+are the same question. Re-queued as sweep 2 with a **triton + `no_buffer`
+control**, so the backend is not confounded with the cache strategy.
+
+### `--mamba-full-memory-ratio=0.3` — no effect, and the reason matters
+
+`max_total_num_tokens` is **524288 in every single config**, because that is our
+own `--max-total-tokens 524288` flag binding — not a memory ceiling. The KV
+budget was never memory-constrained at 262k, so freeing SSM memory has nowhere
+to go. The knob is not useless; it is untestable at this context length. Retest
+it inside Step 14 (512k), where memory actually binds.
+
+### `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` — rejected
+
+Fastest thinking-off code number in the sweep (40.27) and the **only config that
+failed a quality check**: `12*17` returned **`25`**, not 204, thinking off,
+3 tokens. A wrong arithmetic answer disqualifies it whatever the tok/s. It is a
+3-flag bundle so the culprit is unattributed; if revisited, unbundle first.
+Note prose-off also dropped to 19.34, the worst in the sweep.
+
+### `--enable-gdn-replayssm-spec` — promising, not proven
+
+Best on three of four decode measures, 12/12 quality, and it hands ~2 GB of GPU
+back to the page cache (101.3G resident vs 103.4G, 10G cache vs 7G). But at n=3
+the ranges overlap the baseline (38.05–40.55 vs 38.41–39.52 on code-off), so
+this is **not yet a significant result**. Promote only after a full bench
+(longctx + 120-turn agentic). If it holds, it is also a candidate to *replace*
+the hand-rolled `extra_buffer` + `track_interval 64` workaround.
+
+**Conclusion (Step 11):** one candidate worth a full bench
+(`--enable-gdn-replayssm-spec`), one knob deferred to the 512k step
+(`mamba-full-memory-ratio`), one rejected on correctness (the prefill bundle),
+and one experiment that turned into a structural finding about `extra_buffer`.
