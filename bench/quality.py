@@ -183,11 +183,16 @@ def effort_sweep() -> list[dict]:
         "what is my change? Reply with the integer dollar amount only."
     )
     rows = []
-    for thinking, effort, name in [
-        (True, None, "effort_default"),
-        (True, "low", "effort_low"),
-        (True, "medium", "effort_medium"),
-        (False, None, "effort_thinking_off"),
+    # The chat template advertises no effort kwarg (effort_kwarg=None), so try
+    # reasoning_effort as a top-level OpenAI field too and report both.
+    for thinking, effort, top_level, name in [
+        (True, None, None, "effort_default"),
+        (True, "low", None, "effort_low_kwarg"),
+        (True, "medium", None, "effort_medium_kwarg"),
+        (True, "xhigh", None, "effort_xhigh_kwarg"),
+        (True, None, "low", "effort_low_toplevel"),
+        (True, None, "xhigh", "effort_xhigh_toplevel"),
+        (False, None, None, "effort_thinking_off"),
     ]:
         r = chat(
             [{"role": "user", "content": q}],
@@ -195,6 +200,7 @@ def effort_sweep() -> list[dict]:
             temperature=0,
             thinking=thinking,
             reasoning_effort=effort,
+            extra=({"reasoning_effort": top_level} if top_level else None),
         )
         text = r["content"] or ""
         passed = "24" in text
