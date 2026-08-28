@@ -269,3 +269,31 @@ it runs as-is from an x86 host pointed at this server over the network — but
 signal comes from `bench/bfcl.py` (tools, multi-turn, hallucination) and
 `bench/agentic.py` (long-horizon session) instead. Do not report a TB score
 that was not measured.
+
+---
+
+## Step 3c — PLE reuse confirmed (2026-08-28)
+
+Boot 4, same `serve.sh` flags, `PLE_DIR` pointed at the existing mmap:
+
+```
+[07:41:27] PLE table -> mmap /ple/ple_table_51200245760_51200245760.bin (47.7 GiB)
+[07:41:27] PLE table: madvise(MADV_RANDOM) ok
+[07:47:46] PLE table: 128/128 shards already on disk (320001536 rows)
+```
+
+`write_bytes` on the scheduler at the end of the target model's `load_weights`:
+**8192** — eight kilobytes, versus 2.4 GiB and climbing at the same point in the
+previous boot, on its way to 47.7 GiB. Target-model weight load: **6m19s**
+(07:41:27 → 07:47:46), against 45–60 min projected for the same phase with the
+refill. The sampling check itself does not show up in the timing.
+
+Note the shard count: the checkpoint splits the table into **128** shards here,
+not the 512 that `split_ngram_parts` defaults to — the patch reads the count from
+the data, so this does not matter, but it is why the log says 128/128.
+
+**Conclusion (Step 3c):** the reuse fast path is correct and is worth roughly
+**45–55 min per restart**. It only helps from the second boot onward; the first
+boot on a new machine still writes the table once. This is the single largest
+change in the recipe so far and it is a pure boot-time win — no runtime
+behaviour is altered, since a mismatched shard is still copied.
