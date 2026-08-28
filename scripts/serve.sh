@@ -93,5 +93,5 @@ docker run -d --name "${CONTAINER}" --init \
     --speculative-draft-model-quantization unquant
 
 echo "started ${CONTAINER} on ${BIND_ADDR}:${PORT} as ${UIDGID}"
-echo "first load ~8–20 min (PLE mmap fill is quiet). follow: docker logs -f ${CONTAINER}"
+echo "first load ~8–20 min (PLE mmap fill is quiet). poll: ${SCRIPT_DIR}/wait_ready.sh"
 echo "ready: GET http://${BIND_ADDR}:${PORT}/health  then  ${SCRIPT_DIR}/smoke.sh"
