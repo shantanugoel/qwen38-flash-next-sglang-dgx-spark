@@ -196,35 +196,48 @@ On top of the Step 5 winner, all client-invisible:
 
 Measure prefix-cache hit % and 32k resend TTFT, not just decode.
 
-### Step 7 — MTP A/B (one restart each, only if Steps 5–6 are healthy)
+### Step 7 — MTP A/B — **dropped, with evidence**
 
-Background + poll (`AGENTS.md`): one detached boot per MTP id.
+Background + poll (`AGENTS.md`) if this is ever revisited.
 
-QSA draft cap is 4 tokens without a ring-width patch we will **not** ship.
+The baseline server reports `sglang:spec_accept_length` **3.74 out of a 4-token
+draft**. The drafts are already accepted nearly every step, so:
 
-| id | steps / topk / draft | Why |
-| --- | --- | --- |
-| M0 | `SPEC=off` | floor (~18 tok/s historically) |
-| M1 | `SPEC_STEPS=2 SPEC_DRAFT=3` | cheaper drafts, maybe better prose |
-| M2 | `SPEC_STEPS=3 SPEC_DRAFT=4` | current; Qwen paper mean accept ~4.07 |
+- M1 (`SPEC_STEPS=2 SPEC_DRAFT=3`) can only lose accepted tokens.
+- Deeper drafts need QSA ring-width > 4, which is already skipped for a −36%
+  prose regression — and with accept at 3.74/4 there is no upside to weigh
+  against that regression either.
+- M0 (`SPEC=off`) would only re-measure a floor the README already states.
 
-Keep M2 unless M1 is clearly better on prose + thinking-on without losing code.
+Two ~20 min boots for a foregone conclusion is not the best use of the clock.
+Recorded as reasoned-out, **not** as tested.
+
+### Step 7b — Re-measure the baseline cleanly
+
+Background + poll (`AGENTS.md`).
+
+The first baseline run was contaminated: a stale chained "wait for `/health`
+then bench" job from an earlier boot attempt started a second suite 4 s after
+the first, so decode was measured with two clients on the server.
+`bench_fast.sh` now takes an `flock`, and `results/baseline-contaminated/` is
+kept only as evidence. Re-boot the committed defaults and re-run before any
+config is declared better or worse than baseline.
 
 ### Step 8 — Benchmarks on the finalist
 
-Background + poll (`AGENTS.md`). These are the long ones; run them once, on the
-config we intend to ship, not on every candidate.
+Background + poll (`AGENTS.md`). The long ones, run once, on the config we ship.
 
-- `bench/bfcl.py` — fixed 100-case BFCL subset; accuracy by split + invalid
-  tool calls + wall clock / tokens / cache-hit / TTFT / decode tok/s.
-- `scripts/bench_tb.sh` — Terminal-Bench 8-task subset, k=1, PASS/FAIL/TIMEOUT.
-- GSM8K n=20 sanity, thinking off.
-- Vision on vs off as the last comparison, both numbers reported.
+- `bench/bfcl.py` — fixed 100-case BFCL subset; accuracy by split, invalid tool
+  calls, wall clock, tokens, cache-hit, TTFT, decode.
+- `bench/gsm8k.py` — n=20 sanity, thinking off.
+- `bench/agentic.py` at a longer horizon (100+ turns) for the real use case.
+- **No Terminal-Bench number** — the TB 2.x task images are amd64-only and this
+  box has no qemu binfmt (Step 3b). Do not report one.
 
 ### Step 9 — 512k optional
 
 Background + poll (`AGENTS.md`): boot can OOM; watch `docker logs --tail` and
-host `free -h` on a timer, never in the foreground.
+`free -h` on a timer, never in the foreground.
 
 ```
 CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
@@ -232,22 +245,24 @@ CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
 
 with Qwen static YaRN (`factor=4.0`, `original_max_position_embeddings=262144`).
 Pass: boots + 8k needle still works + a ~40k needle. Fail: OOM, rope error, or an
-8k quality break → keep 262k default and document 512k as experimental.
+8k quality break → keep 262k default, document 512k as experimental.
 Do **not** make 512k the default even if it boots.
 
-### Step 10 — vLLM bake-off (only if the clock allows)
+### Step 10 — Vision off, as the last comparison
 
-Background + poll (`AGENTS.md`). Lowest priority: it costs a full image + boot
-cycle and the SGLang path is already measured. If it is skipped, say so in
-`RESEARCH_LOG.md` rather than implying it was tested.
+One boot with `--language-only` purely to report both numbers, then **revert**.
+Vision stays on in the shipped recipe.
 
-### Step 11 — Final recipe
+### Step 11 — vLLM bake-off — lowest priority
 
-Background + poll (`AGENTS.md`): confirmation benches still go via `nohup`.
+Background + poll (`AGENTS.md`). Costs a full image + boot cycle. If the clock
+runs out this stays **untested**, and `RESEARCH_LOG.md` must say so rather than
+implying a comparison was made.
 
-Fold winners into `scripts/serve.sh` defaults + README tables (thinking on **and**
-off, prefix-cache TTFT, needle, tools, BFCL, Terminal-Bench, vision on/off).
-Optional `CONTEXT=524288` documented, not default.
+### Step 12 — Final recipe
+
+Fold winners into `scripts/serve.sh` defaults + README tables. Optional
+`CONTEXT=524288` documented, not default.
 
 ## Skip list (intentional)
 
