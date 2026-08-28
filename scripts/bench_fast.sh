@@ -34,6 +34,18 @@ EFFORT=1 OUT="${OUTDIR}/quality.json" python3 "${ROOT}/bench/quality.py" || true
 echo "=== decode (thinking off + on) ==="
 N="${N:-3}" THINKING=both OUT="${OUTDIR}/decode.json" python3 "${ROOT}/bench/decode.py" || true
 
+if [[ "${QUICK:-0}" == 1 ]]; then
+  echo "=== server metrics (QUICK mode: skipping longctx + agentic) ==="
+  python3 - <<'PY'
+import sys, json
+sys.path.insert(0, "bench")
+from client import server_metrics
+print("RESULT metrics:", json.dumps(server_metrics()))
+PY
+  echo "RESULT bench_fast: ${TAG} done (quick)"
+  exit 0
+fi
+
 echo "=== longctx (8k/32k needle + prefix cache) ==="
 SIZES="${SIZES:-8k,32k}" OUT="${OUTDIR}/longctx.json" python3 "${ROOT}/bench/longctx.py" || true
 
