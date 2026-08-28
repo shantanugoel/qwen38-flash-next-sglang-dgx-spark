@@ -24,6 +24,7 @@ SPEC_TOPK="${SPEC_TOPK:-1}"
 SPEC_DRAFT="${SPEC_DRAFT:-4}"
 CUDA_GRAPH_MAX_BS="${CUDA_GRAPH_MAX_BS:-}"
 MAMBA_STRATEGY="${MAMBA_STRATEGY:-extra_buffer}"
+PAGE_SIZE="${PAGE_SIZE:-64}"
 # Extra raw sglang flags, word-split on purpose: EXTRA_ARGS="--strip-thinking-cache"
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
 
@@ -94,7 +95,7 @@ docker run -d --name "${CONTAINER}" --init \
     --port 30000 \
     --quantization modelopt_fp4 \
     --fp4-gemm-backend flashinfer_cutlass \
-    --page-size 64 \
+    --page-size "${PAGE_SIZE:-64}" \
     --mamba-radix-cache-strategy "${MAMBA_STRATEGY:-extra_buffer}" \
     --mamba-track-interval 64 \
     --max-mamba-cache-size 20 \
