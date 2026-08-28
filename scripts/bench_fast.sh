@@ -11,6 +11,17 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TAG="${TAG:-run}"
 OUTDIR="${ROOT}/results/${TAG}"
 mkdir -p "${OUTDIR}"
+
+# Two suites against one server measure each other, not the server. A stale
+# chained "wait for /health then bench" job is easy to leave behind, so refuse
+# to start a second one.
+LOCK="${ROOT}/results/.bench.lock"
+exec 9>"${LOCK}"
+if ! flock -n 9; then
+  echo "another bench run holds ${LOCK}; refusing to run ${TAG} concurrently" >&2
+  exit 1
+fi
+echo "$$ ${TAG} $(date -u +%FT%TZ)" >&9
 export BASE="${BASE:-http://127.0.0.1:30000}"
 export MODEL="${MODEL:-qwen38-flash-next-nvfp4-mtp}"
 
