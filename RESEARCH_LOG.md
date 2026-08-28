@@ -232,3 +232,40 @@ agentic session, in expected-value order:
 Not pursued: `--enable-hierarchical-cache` / hicache (offloads KV to the *same*
 UMA pool), `--kv-cache-dtype fp8` (QSA wants bf16 KV), disaggregation and
 context-parallel flags (single box), `--enable-unified-memory` (already UMA).
+
+---
+
+## Step 3b — Terminal-Bench does not run on this box (2026-08-28)
+
+Two blockers, found by running the harness rather than assuming:
+
+1. **2.1 is not published.** The `tb` CLI's registry
+   (`laude-institute/terminal-bench/registry.json`) stops at
+   `terminal-bench-core 0.1.1`. Terminal-Bench 2.x moved to **Harbor**
+   (`pip install harbor`), whose registry has `terminal-bench 2.0` — 89 tasks,
+   and all 8 of our subset tasks are in it. 2.1 is the 2.0 point-release and is
+   not separately registered. Pinning 2.0 was the honest substitution.
+2. **The task images are amd64-only.** A control run with the `oracle` agent
+   (no model involved) on `fix-git` pulls `alexgshaw/fix-git:20251031` and dies:
+
+   ```
+   The requested image's platform (linux/amd64) does not match the detected
+   host platform (linux/arm64/v8)
+   container fix-git__…__env-main-1 exited (255)
+   ```
+
+   `/proc/sys/fs/binfmt_misc` has no qemu handler, and
+   `docker run --platform linux/amd64 alpine uname -m` gives
+   `exec /bin/uname: exec format error`. Registering one needs a privileged
+   container that rewrites host `binfmt_misc` — outside what we were asked to
+   do here — and even then, emulated amd64 on a GB10 would put every task into
+   its own timeout, which is not a measurement.
+
+   adrienbrault's Terminal-Bench numbers are on an RTX 5090, i.e. x86.
+
+**Conclusion (Step 3b):** `scripts/bench_tb.sh` stays in-tree and is correct —
+it runs as-is from an x86 host pointed at this server over the network — but
+**no Terminal-Bench number will be reported from this box.** The agentic coding
+signal comes from `bench/bfcl.py` (tools, multi-turn, hallucination) and
+`bench/agentic.py` (long-horizon session) instead. Do not report a TB score
+that was not measured.
