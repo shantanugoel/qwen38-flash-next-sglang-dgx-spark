@@ -44,6 +44,70 @@ Stop: `./scripts/stop.sh`. Default bind is `127.0.0.1`. LAN: `BIND_ADDR=0.0.0.0 
 | `PLE_DIR` | `./data/ple` (sparse ~48 GB backing file) |
 | `IMAGE` | `lmsysorg/sglang:qwen38flashnext` |
 
+## Boot time
+
+The 48 GiB PLE table lives in a file-backed mmap that survives restarts, but
+SGLang re-copies it out of the checkpoint on every boot, in shards, through
+`copy_ple_rows_to_tp_embedding`. On this box that copy alone runs 45–60 min.
+`patches/ple_reuse.py` byte-samples each shard against the checkpoint and skips
+the ones already on disk, so only the **first** boot pays the fill:
+
+```
+PLE table: 128/128 shards already on disk (320001536 rows)
+```
+
+Second and later boots are **~10 min** end to end. Set
+`SGLANG_QWEN4_PLE_REUSE=0` to force the full copy.
+
+## Tuning
+
+`scripts/serve.sh` reads these; the defaults are the recipe.
+
+| Env | Default | Why you would change it |
+| --- | --- | --- |
+| `MEMFRAC` | see below | Lower hands UMA back to the page cache the PLE table is read from |
+| `PREFILL` | see below | Chunked prefill size |
+| `MAX_RUNNING` | see below | Concurrent requests |
+| `CONTEXT` | `262144` | Native rope limit |
+| `MAX_TOTAL` | `524288` | KV token budget |
+| `SPEC_STEPS` / `SPEC_TOPK` / `SPEC_DRAFT` | `3` / `1` / `4` | MTP depth; `SPEC=off` disables |
+| `CUDA_GRAPH_MAX_BS` | see below | Stock captures decode graphs up to bs 256 |
+| `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
+
+## Client notes
+
+- **Thinking is on by default and can be turned off**, despite what the cookbook
+  says: `{"chat_template_kwargs": {"enable_thinking": false}}` works and is much
+  shorter (3 tokens vs ~60 on a one-line arithmetic question).
+- **`reasoning_effort` does nothing on this build.** low / medium / xhigh were
+  measured at 59 / 71 / 64 completion tokens as a template kwarg and 59 / 66 as a
+  top-level OpenAI field — no ordering and no trend, and the chat template
+  reports no effort kwarg. Use `enable_thinking`, not effort.
+- `usage.completion_tokens_details.reasoning_tokens` is always 0; reasoning is
+  billed as content.
+- Tool calls use the `qwen3_coder` parser and come back as OpenAI `tool_calls`.
+
+## Benchmarks
+
+`bench/` holds the harness. All of it talks to the running server over the
+OpenAI-compatible API.
+
+| | |
+| --- | --- |
+| `bench/decode.py` | code + prose decode rate, thinking on and off |
+| `bench/quality.py` | math, tool call, executed code, multi-turn fact, vision, effort sweep |
+| `bench/longctx.py` | 8k/32k needle and prefix-cache resend TTFT |
+| `bench/agentic.py` | long-horizon tool-calling session; TTFT / decode / cache-hit banded by turn |
+| `bench/bfcl.py` | fixed 100-case BFCL subset (AST, irrelevance, multi-turn) |
+| `bench/gsm8k.py` | GSM8K sanity slice |
+| `scripts/bench_tb.sh` | Terminal-Bench subset via Harbor |
+
+**Terminal-Bench does not run on a GB10.** The TB 2.x task images are
+`linux/amd64` only and there is no qemu binfmt handler on this class of box, so
+the task container exits 255 on platform mismatch. `scripts/bench_tb.sh` is
+correct and works from an x86 host pointed at this server over the network. No
+Terminal-Bench number in this repo was measured on a Spark.
+
 ## Measured (one GB10, 2026-08-27)
 
 Single stream, MTP 3/1/4, `trtllm_mha` decode, CUDA graphs on, 262k context.
