@@ -833,3 +833,70 @@ largest effect measured in the whole exploration.
    `--disable-radix-cache`, and that price is not worth paying.
 
 **`--disable-radix-cache` rejected. Radix/prefix caching stays on.**
+
+---
+
+## Step 14 — 512k: boots, and is a **regression**. Not achieved. (2026-08-28)
+
+### Attempt 1 — the published YaRN recipe does not fit this checkpoint
+
+`--json-model-override-args={"rope_scaling":{...}}` silently did nothing and the
+boot died in 30 s:
+
+```
+ValueError: User-specified context_length (524288) is greater than the
+derived context_length (262144).
+```
+
+The checkpoint has **no `rope_scaling` field**. `text_config.rope_parameters` is
+**mrope**:
+
+```json
+{"mrope_interleaved": true, "mrope_section": [11, 11, 10],
+ "partial_rotary_factor": 0.25, "rope_theta": 10000000, "rope_type": "default"}
+```
+
+So the standard Qwen static-YaRN recipe in every write-up targets a field this
+model does not have. The override must target `text_config.rope_parameters` and
+preserve the mrope fields, and `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1` must
+be set or `_derive_context_length` refuses outright.
+
+### Attempt 2 — boots, with less usable context than the default
+
+```
+CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
+--mamba-full-memory-ratio=0.3 + mrope-shaped YaRN override
+```
+
+| | 512k attempt | shipped 262k |
+| --- | ---: | ---: |
+| boot | 587 s | 617 s |
+| **`max_total_num_tokens`** | **201984** | **524288** |
+| GPU resident | 89.3 GiB | 101.3 GiB |
+| page cache | 18 GiB | 10 GiB |
+
+**The KV pool holds 201984 tokens — below the 262144 default context.** Asking
+for 512k produced *less* usable context than not asking. As configured this is
+strictly worse than the shipped recipe.
+
+**`--mamba-full-memory-ratio 0.3` does work — but only here.** GPU fell 101.3 →
+89.3 GiB and page cache rose 10 → 18 GiB, exactly the memory-bound regime
+predicted in Step 11 where `--max-total-tokens` no longer binds first. It is
+confounded with `MEMFRAC=0.82` in this run, so the split is unattributed.
+
+### Why this is not pursued further
+
+`MEMFRAC=0.95` would likely allocate a larger KV pool (the 262k recipe already
+reports 524288 tokens), so a 512k config that *allocates* is probably reachable.
+That still would not make 512k **work**: transformers continues to log
+`rope_type='default'`, i.e. the YaRN parameters are accepted as override args but
+do not appear to change the rope implementation for this mrope model. Beyond
+262k that is raw extrapolation — the exact failure YaRN exists to prevent.
+
+Demonstrating 512k would need a needle **past 262k**, and a ~400k cold prefill has
+previously wedged this box. Booting at `context_length=524288` is **not** evidence
+that 512k works, and will not be reported as such.
+
+**Conclusion (Step 14): 262k stays the default and the only supported context.
+512k is not achieved.** The blocker is not memory tuning — it is that static YaRN
+as published does not compose with this checkpoint's sectioned mrope.
