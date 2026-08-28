@@ -790,3 +790,46 @@ TTFT 0.556 s — a second long tool-calling workload with no corruption.
 the right move is to decline. `irrelevance` (curated) is 80%, so it is the harder
 live split specifically. Worth knowing for an agent loop that trusts every tool
 call it receives.
+
+---
+
+## Step 12 — Radix cache A/B — **cache stays ON** (2026-08-28)
+
+`--disable-radix-cache`, everything else equal (both with
+`--enable-gdn-replayssm-spec`), full bench.
+
+| | radix on | radix off |
+| --- | ---: | ---: |
+| agentic TTFT, turns 1–13 | 0.589 s | 1.074 s |
+| agentic TTFT, turns 14–26 | 0.563 s | 1.497 s |
+| agentic TTFT, turns 27–40 | **0.566 s** | **2.322 s** |
+| agentic cache hit | 91.3 / 96.1 / 97.4% | **0 / 0 / 0%** |
+| 8k resend speedup | 7.0× | 1.2× |
+| 32k resend speedup | **21.0×** | **1.0×** |
+| 40-turn wall clock | 55.2 s | **95.6 s** (+73%) |
+| decode code off | 41.49 | 39.59 |
+| agentic decode | 49.8 / 50.8 / 51.7 | 49.0 / 51.0 / 51.3 |
+| quality | 12/12 | 12/12 |
+| invalid tool calls | 0 | **0** |
+| needles 8k / 32k | PASS / PASS | PASS / PASS |
+| `spec_accept_length` | 3.95 | 3.825 |
+
+**TTFT without the cache grows linearly and had not levelled off at turn 40** —
+0.57 s flat becomes 2.32 s at 4.3k context. Extrapolated to a 100–150 turn
+session at 12k+ context that is 6–7 s per turn of re-prefill. This is the single
+largest effect measured in the whole exploration.
+
+**Two conclusions beyond "keep the cache":**
+
+1. **Decode tok/s is blind to this.** ~51 tok/s either way. Every QUICK-mode
+   sweep in this log is therefore incapable of evaluating caching, and any
+   third-party benchmark of this model that reports only decode rate is missing
+   the property that dominates agentic use.
+2. **Turning the cache off bought no reliability.** 12/12 quality and **0 invalid
+   tool calls** with it off, identical to with it on. The
+   "disable prefix caching to avoid corruption" advice is vLLM-specific (GDN
+   CUBLAS on sm_121); on this SGLang path it is pure cost. This also closes the
+   linear-attention kernel question: `flashinfer` is reachable **only** via
+   `--disable-radix-cache`, and that price is not worth paying.
+
+**`--disable-radix-cache` rejected. Radix/prefix caching stays on.**
