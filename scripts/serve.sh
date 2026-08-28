@@ -116,6 +116,7 @@ docker run -d --name "${CONTAINER}" --init \
     --disable-flashinfer-autotune \
     --enable-metrics \
     --enable-cache-report \
+    --enable-gdn-replayssm-spec \
     "${opt[@]}" \
     "${SPEC_ARGS[@]}" \
     "${EXTRA[@]}"

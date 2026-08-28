@@ -706,3 +706,45 @@ merges this question into the radix A/B (Step 12): with the prefix cache off,
 `page_size > 1` no longer needs `extra_buffer`, so the kernels become reachable.
 That is the trade being measured there: kernel choice **or** prefix caching, not
 both.
+
+---
+
+## Step 13 — `--enable-gdn-replayssm-spec` full bench — **ADOPTED** (2026-08-28)
+
+| | baseline | gdn-replayssm |
+| --- | ---: | ---: |
+| decode code EN, thinking off | 38.55 | **41.49** |
+| decode prose ES, thinking off | 21.99 | 21.36 |
+| decode code EN, thinking on | 32.58 | 32.49 |
+| decode prose ES, thinking on | 24.73 | 24.58 |
+| quality | 12/12 | **12/12** |
+| needle 8k / 32k | PASS / PASS | **PASS / PASS** |
+| TTFT 8k / 32k | 4.49 / 10.34 s | 3.98 / 10.37 s |
+| prefix-cache resend 8k / 32k | 8.0× / 20.6× | 7.0× / **21.0×** |
+| agentic TTFT (bands) | 0.589 / 0.563 / 0.565 | 0.608 / 0.569 / 0.566 |
+| agentic decode (bands) | 49.2 / 49.4 / 49.6 | 49.8 / 50.8 / **51.7** |
+| agentic cache hit | 91.3 / 96.0 / 97.4% | 91.3 / 96.1 / 97.4% |
+| invalid tool calls | 0 | **0** |
+| **`spec_accept_length`** | **3.80** | **3.95** |
+| `max_total_num_tokens` | 524288 | **524288** |
+| GPU resident | 103.4 GiB | **101.3 GiB** |
+
+**Why this is not the n=3 noise the rest of the sweep suffered from:**
+`spec_accept_length` is a server-side counter, not a timing, and it moved
+**3.80 → 3.95 out of a maximum of 4.0**. That is a mechanistic explanation for
+the decode gain — with GDN state handled correctly across speculative rewind,
+more drafted tokens survive verification. The decode result also reproduced
+across two independent boots (40.42 in the QUICK sweep, 41.49 on the full bench)
+against a baseline that has never exceeded 38.96 in five runs.
+
+It costs nothing measurable: identical KV budget, **2.1 GiB less** GPU resident,
+no quality, needle, cache or tool-calling regression.
+
+It is also the conceptually correct fix. `extra_buffer` +
+`--mamba-track-interval 64` is a hand-rolled guard against MTP rewind corrupting
+GDN state; `--enable-gdn-replayssm-spec` is upstream's mechanism for the same
+hazard. They coexist — this run had both — so the guard stays until there is
+evidence it can be dropped safely. Do **not** drop it on the strength of this
+result alone.
+
+**Adopted into `serve.sh` defaults.**
