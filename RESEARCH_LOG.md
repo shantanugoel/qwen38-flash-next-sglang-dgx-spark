@@ -748,3 +748,45 @@ evidence it can be dropped safely. Do **not** drop it on the strength of this
 result alone.
 
 **Adopted into `serve.sh` defaults.**
+
+---
+
+## Step 9 — BFCL multi-turn: scorer fixed, split still not measurable (2026-08-28)
+
+The scorer bug is fixed — the model now loops within a turn (each tool result is
+fed back, up to `BFCL_MT_MAX_STEPS`) and the turn is scored on the union of calls
+made. `multi_turn_base` went **0.0% → 15.0%**.
+
+**15% is still not a valid BFCL multi-turn score, and we will not report it as
+one.** The remaining limit is our harness, not the model: every tool call gets a
+mock `{"status": "ok"}` back. The model cannot see a filesystem, so it probes —
+
+```
+turn0: want ['cd','mkdir','mv']  got ['cd','find','ls','pwd']
+```
+
+Real BFCL multi-turn executes against stateful backends (`GorillaFileSystem`,
+`TwitterAPI`, …) so the model can read actual results and make progress.
+Reproducing that is a port of BFCL's execution layer, well beyond this window.
+
+**Reported instead: the 80 single-turn cases, which are unaffected.**
+
+| split | n | accuracy |
+| --- | ---: | ---: |
+| simple | 30 | 86.7% |
+| multiple | 15 | 73.3% |
+| parallel | 15 | 66.7% |
+| irrelevance | 10 | 80.0% |
+| live_irrelevance | 10 | 30.0% |
+| **total (single-turn)** | **80** | **72.5%** |
+| multi_turn_base | 20 | **not measurable here** |
+
+Useful by-products of the re-score run (295 requests, 1.42 M prompt tokens):
+**0 invalid tool calls**, cache hit **93.8%**, mean decode **45.2 tok/s**, mean
+TTFT 0.556 s — a second long tool-calling workload with no corruption.
+
+**The two findings that stand:** 7 hallucinated function names in the original
+100-case run, and **live_irrelevance 30%** — the model reaches for a tool when
+the right move is to decline. `irrelevance` (curated) is 80%, so it is the harder
+live split specifically. Worth knowing for an agent loop that trusts every tool
+call it receives.
