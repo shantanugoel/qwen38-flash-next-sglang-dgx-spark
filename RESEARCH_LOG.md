@@ -1023,3 +1023,35 @@ stays at 524288.
 have now been eliminated. Any config difference in this log that has not been
 isolated should be read as "unexplained", not as support for whichever
 explanation was most available at the time.
+
+---
+
+## Steps 18–20 — chasing the 512k run's speed: five hypotheses, all dead (2026-08-28)
+
+The 512k config posted agentic decode of **56.2 / 59.8 / 59.6 tok/s** and a 42.1 s
+40-turn wall clock, against ~50 / 51 / 52 and ~55 s everywhere else. It differed
+from the shipped recipe in five variables. Each was then isolated at full
+`MEMFRAC=0.95` / 262k / 524288 KV unless noted:
+
+| isolated variable | agentic decode (bands) | 40-turn wall | verdict |
+| --- | ---: | ---: | --- |
+| *(shipped reference)* | 49.8 / 50.8 / 51.7 | 55.2 s | — |
+| `MEMFRAC=0.82` + `mamba-ratio=0.3` | 50.9 / 52.6 / 52.0 | 53.9 s | **no** (and KV 231936 < 262k) |
+| `MAX_RUNNING=1` | 49.5 / 50.6 / 51.2 | **66.9 s** | **no** (slower; 1 invalid tool call) |
+| `PREFILL=1024` | 49.5 / 50.4 / 50.5 | 55.1 s | **no** (32k TTFT 12.31 s vs 10.37 s — worse) |
+| page-cache residency | covered by the `MEMFRAC` run: 19 GiB cache, +1–2% | — | **no** |
+| 512k context itself | — | — | not a mechanism; see Step 14 |
+
+**Conclusion: the 512k run's speed is unexplained.** It was a single observation
+in a five-variable config, every constituent variable has now been tested alone
+and none reproduces it, and there is no sixth hypothesis worth a boot. It is
+recorded as an **unexplained single-run observation**, not as a lead, and
+explicitly not as an argument for 512k — that config caps usable context at
+201984 tokens.
+
+`PREFILL=1024` also produced the one clean prefill-chunking datapoint in this
+log: **32k TTFT 12.31 s vs 10.37 s at 4096**, i.e. smaller chunks cost ~19% TTFT
+on a long prompt, as expected. 4096 stays.
+
+**Net effect of Steps 18–20 on the recipe: none.** `MEMFRAC=0.95`,
+`PREFILL=4096`, `MAX_RUNNING=4`, 262k all stand.
