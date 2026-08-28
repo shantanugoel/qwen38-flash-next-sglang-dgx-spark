@@ -986,3 +986,40 @@ a checkpoint without the vision tower, or a disaggregated encoder deployment.
 shipped recipe, now proven by a test that cannot be passed blind. Keeping it
 costs at most 89 MiB and no KV, so there was never a headroom argument for
 turning it off.
+
+---
+
+## Step 18 — Mem-fraction isolation: the PLE page-cache theory is dead (2026-08-28)
+
+```
+CONTEXT=262144 MAX_TOTAL=524288 MEMFRAC=0.82 --mamba-full-memory-ratio=0.3
+```
+
+| | shipped 0.95 | memfrac 0.82 + mamba 0.3 | the 512k run |
+| --- | ---: | ---: | ---: |
+| page cache | 10 GiB | **19 GiB** | 18 GiB |
+| GPU resident | 101.3 GiB | 89.3 GiB | 89.3 GiB |
+| agentic decode (bands) | 49.8 / 50.8 / 51.7 | 50.9 / 52.6 / 52.0 | **56.2 / 59.8 / 59.6** |
+| 40-turn wall clock | 55.2 s | 53.9 s | **42.1 s** |
+| `max_total_num_tokens` | **524288** | 231936 | 201984 |
+| quality / needles / invalid calls | 12/12 · 2/2 · 0 | 12/12 · 2/2 · 0 | 11/12 · 2/2 · 0 |
+
+**The page cache was reproduced — 19 GiB, more than the 512k run's 18 GiB — and
+the speed was not.** +1–2% agentic decode, not +15–20%. PLE residency is
+therefore **not** the mechanism behind the 512k run's numbers, and the hypothesis
+this log resurrected in the Step 14 addendum is dead again, now on direct
+evidence rather than absence of evidence.
+
+`MEMFRAC=0.82` is independently rejected anyway: 231936 KV tokens is **below the
+262144 default context**.
+
+**Remaining suspects for the 512k run's speed:** `MAX_RUNNING=1` (fewer scheduler
+slots, less per-step overhead — this workload is a single stream) or
+`PREFILL=1024`. Probing `MAX_RUNNING=1` at full `MEMFRAC=0.95` so the KV budget
+stays at 524288.
+
+**Lesson worth keeping:** the Step 14 addendum treated a difference observed in a
+5-variable config as evidence for one named mechanism. Two of those variables
+have now been eliminated. Any config difference in this log that has not been
+isolated should be read as "unexplained", not as support for whichever
+explanation was most available at the time.
