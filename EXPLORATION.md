@@ -154,115 +154,110 @@ Background + poll (`AGENTS.md`).
 - [x] Terminal-Bench moved to Harbor + `terminal-bench@2.0`; `scripts/host_proxy.py`
       exposes the loopback server on the docker bridge for the in-container agent.
 
-### Step 5 — Serve-flag pack A (UMA / PLE residency)
+### Step 5 — Pack A (mem-frac 0.85 pack) — **DONE, REJECTED**
 
-Background + poll (`AGENTS.md`): stop + `serve.sh` detached, then poll `/health`.
-**Never** `docker logs -f`, never a blocking timeout on the boot.
+`MEMFRAC=0.85 PREFILL=2048 MAX_RUNNING=2 CUDA_GRAPH_MAX_BS=8 --weight-loader-drop-cache-after-load`
 
-One restart. `nvidia-smi --query-compute-apps` during the baseline boot showed the
-scheduler holding **82.8 GiB** of the 121 GiB UMA pool at `--mem-fraction-static
-0.95`, leaving ~2–7 GiB free. The 47.7 GiB PLE table is random-access and lives in
-**page cache**, so mem-fraction is a PLE-residency knob and therefore a decode-speed
-knob, not only a stability knob. **Vision stays on.**
+Result: no measurable speed change vs a clean baseline, **−39% KV budget**
+(524288 → 318464) and MTP accept down 3.80 → 3.50. **Keep the committed
+defaults.** The PLE-residency hypothesis that motivated it is dead: 0.85 bought
+only ~4 GiB of page cache against a 47.7 GiB table and bought nothing in speed.
+Individual components were never attributed — that is what Step 13 fixes.
 
-```
-MEMFRAC=0.85 PREFILL=2048 MAX_RUNNING=2 CUDA_GRAPH_MAX_BS=8 \
-EXTRA_ARGS="--weight-loader-drop-cache-after-load" ./scripts/serve.sh
-```
+### Step 6 — Baseline re-measure (clean) — **DONE**
 
-- `--mem-fraction-static 0.85` — hand ~12 GiB back to the page cache.
-- `--chunked-prefill-size 2048` — activation vs throughput.
-- `--max-running-requests 2` — agentic is one stream plus maybe a retry.
-- `--cuda-graph-max-bs-decode 8` — stock captures decode graphs to bs **256**;
-  we never exceed `--max-running-requests`. Saves capture time and memory.
-- `--weight-loader-drop-cache-after-load` — `posix_fadvise(DONTNEED)` per shard,
-  which frees exactly the page cache the PLE table wants.
-- keep MTP 3/1/4, graphs, `trtllm_mha` decode, multimodal tower.
+The first baseline was contaminated by a concurrent second bench client.
+`bench_fast.sh` now takes an `flock`. Clean numbers are the gate in
+`RESEARCH_LOG.md`; `results/baseline-contaminated/` is kept as evidence.
 
-Gate: quality no worse than baseline, 32k longctx stable, decode ≥ baseline.
+### Step 7 — MTP A/B — **DROPPED, with evidence**
 
-### Step 6 — Agentic cache/session knobs (one restart)
+`sglang:spec_accept_length` is **3.80 out of a 4-token draft**. M1 (2/1/3) can
+only lose accepted tokens; deeper drafts need QSA ring-width > 4, already
+skipped for a −36% prose regression. Recorded as reasoned-out, **not tested**.
 
-Background + poll (`AGENTS.md`).
+### Step 8 — Finalist benchmarks on the shipped recipe — **DONE (thinking off)**
 
-On top of the Step 5 winner, all client-invisible:
+BFCL 100-case, GSM8K n=20, agentic 120 turns. Numbers in `RESEARCH_LOG.md`.
+**Terminal-Bench is impossible on this box** (amd64-only task images, no qemu
+binfmt — Step 3b). Never report a TB number measured here.
 
-- `--strip-thinking-cache` — drop reasoning from the cached prefix so 100–150
-  turn sessions keep hitting the radix cache.
-- `--radix-eviction-policy lfu` (or `slru`) — keep the system prompt and tool
-  definitions across a long session instead of evicting by recency.
-- `--enable-gdn-replayssm-spec` — upstream handling of GDN state under
-  speculative rewind; this is the corruption Death-By-Tokens patched by hand.
+Open follow-up: the BFCL `multi_turn_base` split scores 0.0% because of **our
+scorer**, not the model — it issues one tool call per turn (correct agentic
+behaviour) while the ground truth lists the whole multi-call sequence for that
+turn. Fix in Step 9.
 
-Measure prefix-cache hit % and 32k resend TTFT, not just decode.
+### Step 9 — BFCL multi-turn scorer fix + re-score — **TODO**
 
-### Step 7 — MTP A/B — **dropped, with evidence**
+Let the model loop *within* a turn (feed each tool result back until it stops
+calling), then compare the union of called function names against the turn's
+ground truth. Re-run the 20 multi-turn cases only. Report the corrected split
+accuracy and reissue the headline number; the current 58% is not reportable.
 
-Background + poll (`AGENTS.md`) if this is ever revisited.
+### Step 10 — Agentic session with **thinking on** — **IN PROGRESS**
 
-The baseline server reports `sglang:spec_accept_length` **3.74 out of a 4-token
-draft**. The drafts are already accepted nearly every step, so:
+The finalist scenario, and the sharper probe for MTP-rewind / GDN-state
+corruption (the reported failure mode involves reasoning traces). 120 turns,
+tools, radix cache on.
 
-- M1 (`SPEC_STEPS=2 SPEC_DRAFT=3`) can only lose accepted tokens.
-- Deeper drafts need QSA ring-width > 4, which is already skipped for a −36%
-  prose regression — and with accept at 3.74/4 there is no upside to weigh
-  against that regression either.
-- M0 (`SPEC=off`) would only re-measure a floor the README already states.
+### Step 11 — Kernel and memory sweep — **QUEUED** (`scripts/sweep.sh`)
 
-Two ~20 min boots for a foregone conclusion is not the best use of the clock.
-Recorded as reasoned-out, **not** as tested.
+`QUICK=1` (decode + quality only) per config; a boot failure is a **result**,
+not a stop condition — several of these may have no sm_121 cubins.
 
-### Step 7b — Re-measure the baseline cleanly
+| tag | config | question |
+| --- | --- | --- |
+| `lin-flashinfer` | `--linear-attn-backend=flashinfer` | GDN kernel; auto-selected on SM100, untested on SM121 |
+| `lin-cutedsl` | `--linear-attn-backend=cutedsl` | same |
+| `lin-nvidia-kda` | `--linear-attn-backend=nvidia_kda` | same |
+| `mamba-ratio-03` | `--mamba-full-memory-ratio=0.3` | recover SSM memory for KV / concurrency |
+| `prefill8192-graph8` | `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` | TTFT bundle |
+| `gdn-replayssm` | `--enable-gdn-replayssm-spec` | does the upstream fix replace our `extra_buffer` + `track_interval 64` workaround? |
 
-Background + poll (`AGENTS.md`).
+### Step 12 — Radix cache A/B — **TODO**
 
-The first baseline run was contaminated: a stale chained "wait for `/health`
-then bench" job from an earlier boot attempt started a second suite 4 s after
-the first, so decode was measured with two clients on the server.
-`bench_fast.sh` now takes an `flock`, and `results/baseline-contaminated/` is
-kept only as evidence. Re-boot the committed defaults and re-run before any
-config is declared better or worse than baseline.
+`--disable-radix-cache` vs on, **with thinking on**, 120 turns. Speed *and*
+reliability. Current evidence with the cache **on** and the Mamba guard in
+place: 0 invalid tool calls across ~200 tool turns, correct 32k cached-resend
+needle, cache hit 95–99%. This step is about what we give up by turning it off,
+and whether the guard is load-bearing.
 
-### Step 8 — Benchmarks on the finalist
+### Step 13 — Unbundle whatever won — **TODO**
 
-Background + poll (`AGENTS.md`). The long ones, run once, on the config we ship.
+Pack A taught this: never ship a bundle. Any winning multi-flag config from
+Step 11 gets its components measured one at a time before it reaches
+`serve.sh` defaults.
 
-- `bench/bfcl.py` — fixed 100-case BFCL subset; accuracy by split, invalid tool
-  calls, wall clock, tokens, cache-hit, TTFT, decode.
-- `bench/gsm8k.py` — n=20 sanity, thinking off.
-- `bench/agentic.py` at a longer horizon (100+ turns) for the real use case.
-- **No Terminal-Bench number** — the TB 2.x task images are amd64-only and this
-  box has no qemu binfmt (Step 3b). Do not report one.
-
-### Step 9 — 512k optional
-
-Background + poll (`AGENTS.md`): boot can OOM; watch `docker logs --tail` and
-`free -h` on a timer, never in the foreground.
+### Step 14 — 512k optional — **TODO**
 
 ```
 CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
 ```
 
-with Qwen static YaRN (`factor=4.0`, `original_max_position_embeddings=262144`).
-Pass: boots + 8k needle still works + a ~40k needle. Fail: OOM, rope error, or an
-8k quality break → keep 262k default, document 512k as experimental.
-Do **not** make 512k the default even if it boots.
+plus Qwen static YaRN (`factor=4.0`, `original_max_position_embeddings=262144`),
+layered on whatever `--mamba-full-memory-ratio` frees. Pass: boots + 8k needle
+still works + a ~40k needle. Do **not** make it the default even if it boots.
 
-### Step 10 — Vision off, as the last comparison
+### Step 15 — Vision off — **TODO**
 
 One boot with `--language-only` purely to report both numbers, then **revert**.
 Vision stays on in the shipped recipe.
 
-### Step 11 — vLLM bake-off — lowest priority
+### Step 16 — vLLM bake-off — **NOT PLANNED, with a reason**
 
-Background + poll (`AGENTS.md`). Costs a full image + boot cycle. If the clock
-runs out this stays **untested**, and `RESEARCH_LOG.md` must say so rather than
-implying a comparison was made.
+vLLM on sm_121 needs `--no-enable-prefix-caching` (GDN CUBLAS bug). Prefix
+caching is what carries this use case: 99.0% hit and 20.6× warm-prefill
+speedup over 120 turns, against a vLLM decode number reported at ~25–28 tok/s
+versus our 38.6. Trading the cache away to chase a slower decode loses on the
+metric that matters. If it is never run, `RESEARCH_LOG.md` says **untested** —
+it does not imply a comparison was made.
 
-### Step 12 — Final recipe
+### Step 17 — Final recipe
 
-Fold winners into `scripts/serve.sh` defaults + README tables. Optional
-`CONTEXT=524288` documented, not default.
+Fold winners into `scripts/serve.sh` defaults + README tables: decode thinking
+on **and** off, agentic 120-turn bands, prefix-cache TTFT, needles, BFCL
+(corrected), GSM8K, vision on/off. Optional `CONTEXT=524288` documented, not
+default. Last commit: `Ship measured one-GB10 Flash-Next recipe`.
 
 ## Skip list (intentional)
 

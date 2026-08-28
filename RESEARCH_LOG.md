@@ -459,3 +459,95 @@ Decode tok/s in the agentic bench (47–51) is higher than in the decode bench
 (38.8) because those turns are short generations onto a warm 90–97% cached
 prefix — that is the realistic agentic number, and it is the one worth quoting
 for this use case.
+
+---
+
+## Step 6 — Clean baseline, and pack A rejected (2026-08-28)
+
+Re-ran the committed defaults with the `flock` in place, single client.
+
+| | baseline 0.95 (clean) | packA 0.85 |
+| --- | ---: | ---: |
+| decode code EN, thinking off | **38.55** | 38.79 |
+| decode prose ES, thinking off | 21.99 | 21.98 |
+| decode code EN, thinking on | 32.58 | 34.60 |
+| decode prose ES, thinking on | 24.73 | 23.68 |
+| needle 8k / 32k TTFT | 4.49 / 10.34 s | 3.77 / 10.41 s |
+| prefix-cache resend 8k / 32k | 8.0× / **20.6×** | 6.7× / 20.9× |
+| agentic TTFT (3 bands) | 0.59 / 0.56 / 0.57 s | 0.60 / 0.56 / 0.57 s |
+| agentic decode | 49.2 / 49.4 / 49.6 | 50.6 / 49.6 / 47.1 |
+| agentic cache hit | 91.3 / 96.0 / **97.4%** | 90.0 / 95.7 / 97.3% |
+| invalid tool calls | **0** | **0** |
+| `max_total_num_tokens` | **524288** | 318464 |
+| `spec_accept_length` | **3.80** | 3.50 |
+| boot | 617 s | 631 s (incl. a fresh PLE fill) |
+
+**Conclusion (Step 6):** every difference is inside run-to-run noise, while
+mem-frac 0.85 costs **39% of the KV budget** and 0.30 of speculative accept
+length. **Pack A is rejected; the committed defaults stand.** The whole apparent
+pack-A win in the earlier write-up was the contaminated baseline — a reminder
+that a bundled config plus a dirty control is how you talk yourself into a
+regression.
+
+---
+
+## Step 8 — Finalist benchmarks, shipped recipe, thinking off (2026-08-28)
+
+### Agentic, 120 turns, tools — the use case
+
+| turns | median TTFT | median decode | median cache hit | median ctx |
+| --- | ---: | ---: | ---: | ---: |
+| 1–40 | 0.549 s | 47.8 tok/s | 95.5% | 2538 |
+| 41–80 | 0.575 s | 41.7 tok/s | 98.4% | 7102 |
+| 81–120 | 0.573 s | 45.1 tok/s | **99.0%** | 11792 |
+
+119 tool turns, **0 invalid tool calls**, fact planted at turn 3 recalled
+correctly at turn 120, final context 14138 tokens, 157.9 s wall. **TTFT is flat
+as context grows** — the radix cache is absorbing the resend pattern completely.
+
+### GSM8K n=20, thinking off
+
+**19/20 = 95.0%**, 269 s, median decode 35.8 tok/s. Checkpoint's published full
+GSM8K is 97.27, so a 20-case slice at 95% is consistent — this is a regression
+gate, not a leaderboard entry.
+
+### BFCL 100-case subset — **headline number withheld**
+
+| split | n | accuracy |
+| --- | ---: | ---: |
+| simple | 30 | 86.7% |
+| multiple | 15 | 73.3% |
+| parallel | 15 | 66.7% |
+| irrelevance | 10 | 80.0% |
+| live_irrelevance | 10 | **30.0%** |
+| multi_turn_base | 20 | **0.0% — scorer bug** |
+
+Wall 473 s, 150 requests, 336693 prompt / 12280 completion tokens, cache hit
+72.0%, mean TTFT 0.938 s, mean decode 41.8 tok/s.
+
+**The 58% aggregate is not reportable.** `multi_turn_base` scores 0.0% because
+our relaxed scorer compares one turn's ground-truth *sequence* against a single
+model response, e.g. `want ['cd','mkdir','mv'] got ['cd']`. Issuing `cd`, reading
+the result, then `mkdir` is correct agentic behaviour; the scorer cannot express
+it. Fixed in Step 9 by letting the model loop within a turn.
+
+Two findings that **do** survive:
+
+- **7 invalid tool calls**, all hallucinated function names not in the provided
+  tool list — `web_fetch`, `web_search`, `database_us_census`. Concentrated in
+  `parallel` and `live_irrelevance`.
+- **live_irrelevance 30%**: on live/hallucination cases the model reaches for a
+  tool when the right answer is to decline. `irrelevance` (curated) is 80%, so
+  this is specifically the harder live split. Worth knowing for an agent loop
+  that trusts every tool call it gets.
+
+### Corruption check with prefix caching **on**
+
+Across baseline 40t, packA 40t and the 120t run: **0 invalid tool calls in ~200
+tool turns**, correct answer on the 32k cached resend, cache hit 95–99%. The
+documented hazard is **MTP rewind corrupting GDN/Mamba state**, not the KV prefix
+cache, and `serve.sh` already carries the mitigation
+(`--mamba-radix-cache-strategy extra_buffer --mamba-track-interval 64`). Honest
+statement: **guard on, no corruption observed** — not "the bug is fixed". The
+`--no-enable-prefix-caching` advice in circulation is vLLM-specific (GDN CUBLAS
+bug on sm_121).
