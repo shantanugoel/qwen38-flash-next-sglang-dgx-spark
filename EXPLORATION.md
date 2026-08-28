@@ -141,98 +141,113 @@ Same occupant:
 
 Commit: log only, unless we add a documented client snippet to README later.
 
-### Step 5 — Serve-flag pack A (stability / agentic memory)
+### Step 4b — Boot cost (done out of order, 2026-08-28)
+
+Background + poll (`AGENTS.md`).
+
+- [x] Found the 47.7 GiB PLE refill that runs on **every** boot; added
+      `patches/ple_reuse.py` (verified byte-sample fast path) and wired it into
+      `prepare.sh`.
+- [x] `serve.sh` parameterized (`MEMFRAC`, `PREFILL`, `MAX_RUNNING`, `CONTEXT`,
+      `MAX_TOTAL`, `SPEC_*`, `CUDA_GRAPH_MAX_BS`, `EXTRA_ARGS`) so an A/B is an
+      env prefix, not an edit.
+- [x] Terminal-Bench moved to Harbor + `terminal-bench@2.0`; `scripts/host_proxy.py`
+      exposes the loopback server on the docker bridge for the in-container agent.
+
+### Step 5 — Serve-flag pack A (UMA / PLE residency)
 
 Background + poll (`AGENTS.md`): stop + `serve.sh` detached, then poll `/health`.
+**Never** `docker logs -f`, never a blocking timeout on the boot.
 
-One restart. Combined because each is a 10–15 min boot and they target the same
-long-horizon failure mode (UMA starvation). **Vision stays on** — do not add
-`--language-only` or `--language-model-only`.
+One restart. `nvidia-smi --query-compute-apps` during the baseline boot showed the
+scheduler holding **82.8 GiB** of the 121 GiB UMA pool at `--mem-fraction-static
+0.95`, leaving ~2–7 GiB free. The 47.7 GiB PLE table is random-access and lives in
+**page cache**, so mem-fraction is a PLE-residency knob and therefore a decode-speed
+knob, not only a stability knob. **Vision stays on.**
 
-- `--mem-fraction-static 0.85` (0.95 left ~6–8 GiB; hashd1ve hung the box on
-  sequential long prefills at 0.85 even)
-- `--chunked-prefill-size 2048` (activation vs throughput)
-- `--max-running-requests 2` (agentic is 1 stream + maybe a retry)
-- keep MTP 3/1/4, graphs, trtllm_mha decode, multimodal tower
+```
+MEMFRAC=0.85 PREFILL=2048 MAX_RUNNING=2 CUDA_GRAPH_MAX_BS=8 \
+EXTRA_ARGS="--weight-loader-drop-cache-after-load" ./scripts/serve.sh
+```
 
-If quality holds and longctx 32k is stable, this becomes the new default skeleton.
+- `--mem-fraction-static 0.85` — hand ~12 GiB back to the page cache.
+- `--chunked-prefill-size 2048` — activation vs throughput.
+- `--max-running-requests 2` — agentic is one stream plus maybe a retry.
+- `--cuda-graph-max-bs-decode 8` — stock captures decode graphs to bs **256**;
+  we never exceed `--max-running-requests`. Saves capture time and memory.
+- `--weight-loader-drop-cache-after-load` — `posix_fadvise(DONTNEED)` per shard,
+  which frees exactly the page cache the PLE table wants.
+- keep MTP 3/1/4, graphs, `trtllm_mha` decode, multimodal tower.
 
-Commit: `serve.sh` change only after the numbers land.
+Gate: quality no worse than baseline, 32k longctx stable, decode ≥ baseline.
 
-### Step 6 — MTP A/B (one restart each, only if Step 5 is healthy)
+### Step 6 — Agentic cache/session knobs (one restart)
 
-Background + poll (`AGENTS.md`): one detached boot per MTP id, never wait on logs -f.
+Background + poll (`AGENTS.md`).
+
+On top of the Step 5 winner, all client-invisible:
+
+- `--strip-thinking-cache` — drop reasoning from the cached prefix so 100–150
+  turn sessions keep hitting the radix cache.
+- `--radix-eviction-policy lfu` (or `slru`) — keep the system prompt and tool
+  definitions across a long session instead of evicting by recency.
+- `--enable-gdn-replayssm-spec` — upstream handling of GDN state under
+  speculative rewind; this is the corruption Death-By-Tokens patched by hand.
+
+Measure prefix-cache hit % and 32k resend TTFT, not just decode.
+
+### Step 7 — MTP A/B (one restart each, only if Steps 5–6 are healthy)
+
+Background + poll (`AGENTS.md`): one detached boot per MTP id.
 
 QSA draft cap is 4 tokens without a ring-width patch we will **not** ship.
 
 | id | steps / topk / draft | Why |
 | --- | --- | --- |
-| M0 | off | floor (~18 tok/s historically) |
-| M1 | 2/1/3 | cheaper drafts, maybe better prose |
-| M2 | 3/1/4 | current; Qwen paper mean accept ~4.07 at 4-step |
-| M3 | skip 4/1/5 | needs ring >4; skip |
+| M0 | `SPEC=off` | floor (~18 tok/s historically) |
+| M1 | `SPEC_STEPS=2 SPEC_DRAFT=3` | cheaper drafts, maybe better prose |
+| M2 | `SPEC_STEPS=3 SPEC_DRAFT=4` | current; Qwen paper mean accept ~4.07 |
 
-Keep M2 unless M1 is clearly better on **prose + thinking-on** without losing code.
+Keep M2 unless M1 is clearly better on prose + thinking-on without losing code.
 
-Commit: serve flags if M1 wins; else log.
+### Step 8 — Benchmarks on the finalist
 
-### Step 7 — Leftover server knobs (only if still unknown)
+Background + poll (`AGENTS.md`). These are the long ones; run them once, on the
+config we intend to ship, not on every candidate.
 
-Background + poll (`AGENTS.md`). At most two detached restarts.
+- `bench/bfcl.py` — fixed 100-case BFCL subset; accuracy by split + invalid
+  tool calls + wall clock / tokens / cache-hit / TTFT / decode tok/s.
+- `scripts/bench_tb.sh` — Terminal-Bench 8-task subset, k=1, PASS/FAIL/TIMEOUT.
+- GSM8K n=20 sanity, thinking off.
+- Vision on vs off as the last comparison, both numbers reported.
 
-Try at most two more restarts, highest expected value first:
-
-1. `--chunked-prefill-size 1024` vs 2048 on 32k TTFT (long-horizon prefills).
-2. Drop `--disable-prefill-cuda-graph` **only if** logs show prefill graphs would
-   capture on this mmap path (Felliks disk-cache path cannot; hashd1ve mmap can
-   capture **decode** graphs).
-3. Do **not** retune: `--fp4-gemm-backend`, `--mamba-ssm-dtype`, `--enable-tf32-matmul`,
-   `--num-continuous-decode-steps`, `--moe-runner-backend` (sm_121 dead ends).
-
-### Step 8 — 512k optional
+### Step 9 — 512k optional
 
 Background + poll (`AGENTS.md`): boot can OOM; watch `docker logs --tail` and
-host `free -h` on a timer, do not sit in the foreground.
-
-Native rope is 262144. Try:
+host `free -h` on a timer, never in the foreground.
 
 ```
-CONTEXT=524288 YARN=1 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
+CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
 ```
 
 with Qwen static YaRN (`factor=4.0`, `original_max_position_embeddings=262144`).
-
-Pass: boots + 8k needle still works + a ~40k needle (not a full 400k haystack).
-Fail: OOM, rope error, or 8k quality break → keep 262k default, document the env
-knob as experimental.
-
+Pass: boots + 8k needle still works + a ~40k needle. Fail: OOM, rope error, or an
+8k quality break → keep 262k default and document 512k as experimental.
 Do **not** make 512k the default even if it boots.
 
-### Step 9 — vLLM bake-off
+### Step 10 — vLLM bake-off (only if the clock allows)
 
-Background + poll (`AGENTS.md`): stop SGLang first, start vLLM detached, poll its
-`/health` (port likely 18300). Image pulls in the background only.
+Background + poll (`AGENTS.md`). Lowest priority: it costs a full image + boot
+cycle and the SGLang path is already measured. If it is skipped, say so in
+`RESEARCH_LOG.md` rather than implying it was tested.
 
-Use the already-local `qwen38-flash-dgx:latest` (blazux mmap image) if it is that
-recipe; otherwise pull `vllm/vllm-openai:qwen38-flash-next` only if disk/time
-allow.
+### Step 11 — Final recipe
 
-Same checkpoint, MTP=2, ctx 262k, `--no-enable-prefix-caching` (GDN sm_121 bug).
+Background + poll (`AGENTS.md`): confirmation benches still go via `nohup`.
 
-Compare: thinking-on decode, 8k/32k prefill+needle, tool-call. vLLM wins only if
-it is faster **and** not worse on tools/needle/code-exec, **or** dramatically
-faster on prefill with equal quality (agentic search dumps care about TTFT).
-
-If vLLM wins, the final recipe switches engine. If not, record why SGLang stays.
-
-### Step 10 — Final recipe
-
-Background + poll (`AGENTS.md`): last confirmation benches still go via `nohup`.
-
-Fold winners into `scripts/serve.sh` + README tables (thinking on **and** off,
-prefix-cache TTFT, needle, tools, smoke). Optional `CTX=512k` documented, not default.
-
-Last commit: `Ship measured one-GB10 Flash-Next recipe`.
+Fold winners into `scripts/serve.sh` defaults + README tables (thinking on **and**
+off, prefix-cache TTFT, needle, tools, BFCL, Terminal-Bench, vision on/off).
+Optional `CONTEXT=524288` documented, not default.
 
 ## Skip list (intentional)
 
