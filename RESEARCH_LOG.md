@@ -634,13 +634,21 @@ budget was never memory-constrained at 262k, so freeing SSM memory has nowhere
 to go. The knob is not useless; it is untestable at this context length. Retest
 it inside Step 14 (512k), where memory actually binds.
 
-### `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` — rejected
+### `PREFILL=8192 CUDA_GRAPH_MAX_BS=8 --disable-cuda-graph-padding` — held back
 
-Fastest thinking-off code number in the sweep (40.27) and the **only config that
-failed a quality check**: `12*17` returned **`25`**, not 204, thinking off,
-3 tokens. A wrong arithmetic answer disqualifies it whatever the tok/s. It is a
-3-flag bundle so the culprit is unattributed; if revisited, unbundle first.
-Note prose-off also dropped to 19.34, the worst in the sweep.
+Fastest thinking-off code number in the sweep (40.27) and the only sweep-1
+config to fail a quality check. **Correction to an earlier note in this log:**
+the failing check is `effort_thinking_off`, not `math_12x17`. The question is
+"4 pens at $3 and 2 notebooks at $7, change from $50" — answer 24 — and the
+config replied **25** with thinking off in 3 tokens. `math_12x17` passed.
+
+That is a wrong answer, but it is one borderline two-step word problem answered
+without thinking in three tokens, at temperature 0. It is weak evidence, not the
+catastrophic arithmetic failure the earlier wording implied. Held back rather
+than condemned: it is a 3-flag bundle, so if it is ever revisited it must be
+unbundled and re-tested with a bigger quality set. Note prose-off also dropped
+to 19.34, the worst in the sweep, which is the more consistent argument against
+it.
 
 ### `--enable-gdn-replayssm-spec` — promising, not proven
 
