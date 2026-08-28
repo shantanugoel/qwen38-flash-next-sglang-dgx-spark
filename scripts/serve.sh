@@ -12,6 +12,34 @@ require_spark
 PORT="${PORT:-30000}"
 BIND_ADDR="${BIND_ADDR:-127.0.0.1}"
 
+# Tunables. Defaults are the shipped recipe; override per experiment, e.g.
+#   MEMFRAC=0.85 PREFILL=2048 ./scripts/serve.sh
+MEMFRAC="${MEMFRAC:-0.95}"
+PREFILL="${PREFILL:-4096}"
+MAX_RUNNING="${MAX_RUNNING:-4}"
+CONTEXT="${CONTEXT:-262144}"
+MAX_TOTAL="${MAX_TOTAL:-524288}"
+SPEC_STEPS="${SPEC_STEPS:-3}"
+SPEC_TOPK="${SPEC_TOPK:-1}"
+SPEC_DRAFT="${SPEC_DRAFT:-4}"
+CUDA_GRAPH_MAX_BS="${CUDA_GRAPH_MAX_BS:-}"
+# Extra raw sglang flags, word-split on purpose: EXTRA_ARGS="--strip-thinking-cache"
+read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
+
+opt=()
+[[ -n "${CUDA_GRAPH_MAX_BS}" ]] && opt+=(--cuda-graph-max-bs-decode "${CUDA_GRAPH_MAX_BS}")
+if [[ "${SPEC:-nextn}" == "off" ]]; then
+  SPEC_ARGS=()
+else
+  SPEC_ARGS=(
+    --speculative-algorithm NEXTN
+    --speculative-num-steps "${SPEC_STEPS}"
+    --speculative-eagle-topk "${SPEC_TOPK}"
+    --speculative-num-draft-tokens "${SPEC_DRAFT}"
+    --speculative-draft-model-quantization unquant
+  )
+fi
+
 docker image inspect "${IMAGE}" >/dev/null
 [[ -f "${QWEN4_BACKEND}" && -f "${QSA_BACKEND}" ]] || {
   echo "patches missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
@@ -70,11 +98,11 @@ docker run -d --name "${CONTAINER}" --init \
     --mamba-track-interval 64 \
     --max-mamba-cache-size 20 \
     --mamba-ssm-dtype float32 \
-    --chunked-prefill-size 4096 \
-    --max-running-requests 4 \
-    --max-total-tokens 524288 \
-    --context-length 262144 \
-    --mem-fraction-static 0.95 \
+    --chunked-prefill-size "${PREFILL}" \
+    --max-running-requests "${MAX_RUNNING}" \
+    --max-total-tokens "${MAX_TOTAL}" \
+    --context-length "${CONTEXT}" \
+    --mem-fraction-static "${MEMFRAC}" \
     --allow-auto-truncate \
     --ple-offload-embedding \
     --reasoning-parser qwen3 \
@@ -86,11 +114,9 @@ docker run -d --name "${CONTAINER}" --init \
     --disable-flashinfer-autotune \
     --enable-metrics \
     --enable-cache-report \
-    --speculative-algorithm NEXTN \
-    --speculative-num-steps 3 \
-    --speculative-eagle-topk 1 \
-    --speculative-num-draft-tokens 4 \
-    --speculative-draft-model-quantization unquant
+    "${opt[@]}" \
+    "${SPEC_ARGS[@]}" \
+    "${EXTRA[@]}"
 
 echo "started ${CONTAINER} on ${BIND_ADDR}:${PORT} as ${UIDGID}"
 echo "first load ~8–20 min (PLE mmap fill is quiet). poll: ${SCRIPT_DIR}/wait_ready.sh"

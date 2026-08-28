@@ -25,9 +25,10 @@ HELPER = '''
 def _ple_reuse_ok(param, loaded_weight) -> bool:
     """True when the mmap already byte-matches the checkpoint table.
 
-    Verification is by random row sampling: SGLANG_QWEN4_PLE_REUSE_SAMPLES rows
-    (default 8192) plus the first and last row. Rows are 160 B, so this is a few
-    thousand page faults, not a 48 GiB read.
+    Verification is by random byte-range sampling over a flat uint8 view, so it
+    does not care about the table's shape: SGLANG_QWEN4_PLE_REUSE_SAMPLES
+    windows (default 4096) of 4 KiB each, plus the first and last window. That
+    is a few thousand page faults, not a 48 GiB read.
     """
     import logging
     import os
@@ -37,31 +38,51 @@ def _ple_reuse_ok(param, loaded_weight) -> bool:
     if not _PLE_MMAP_DIR:
         return False
     if os.environ.get("SGLANG_QWEN4_PLE_REUSE", "1").strip() == "0":
-        return False
-    dst = param.data
-    if tuple(dst.shape) != tuple(loaded_weight.shape) or dst.dtype != loaded_weight.dtype:
-        return False
-    if dst.numel() == 0 or dst.ndim != 2:
+        log.info("PLE table: reuse disabled by SGLANG_QWEN4_PLE_REUSE=0")
         return False
 
-    n_rows = dst.shape[0]
+    dst = param.data
+    if tuple(dst.shape) != tuple(loaded_weight.shape):
+        log.info(
+            "PLE table: shape %s != checkpoint %s; refilling",
+            tuple(dst.shape),
+            tuple(loaded_weight.shape),
+        )
+        return False
+    if dst.dtype != loaded_weight.dtype:
+        log.info(
+            "PLE table: dtype %s != checkpoint %s; refilling",
+            dst.dtype,
+            loaded_weight.dtype,
+        )
+        return False
+
     try:
-        k = int(os.environ.get("SGLANG_QWEN4_PLE_REUSE_SAMPLES", "8192"))
+        a = dst.reshape(-1).view(torch.uint8)
+        b = loaded_weight.reshape(-1).contiguous().view(torch.uint8)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("PLE table: cannot take a flat byte view (%s); refilling", exc)
+        return False
+
+    n = int(a.numel())
+    win = 4096
+    if n < win * 4:
+        return False
+    try:
+        k = int(os.environ.get("SGLANG_QWEN4_PLE_REUSE_SAMPLES", "4096"))
     except ValueError:
-        k = 8192
-    k = max(16, min(k, n_rows))
+        k = 4096
+    k = max(64, k)
     gen = torch.Generator().manual_seed(0x5150)
-    idx = torch.randint(0, n_rows, (k,), generator=gen).tolist()
-    idx = sorted(set(idx + [0, n_rows - 1]))
+    offs = (torch.randint(0, (n - win) // win, (k,), generator=gen) * win).tolist()
+    offs = sorted(set(offs + [0, n - win]))
 
     t0 = time.perf_counter()
     try:
-        for i in idx:
-            a = dst[i].contiguous().view(torch.uint8)
-            b = loaded_weight[i].contiguous().view(torch.uint8)
-            if not torch.equal(a, b):
+        for o in offs:
+            if not torch.equal(a[o : o + win], b[o : o + win]):
                 log.info(
-                    "PLE table: mmap row %d differs from checkpoint; refilling", i
+                    "PLE table: mmap differs from checkpoint at byte %d; refilling", o
                 )
                 return False
     except Exception as exc:  # noqa: BLE001
@@ -69,11 +90,11 @@ def _ple_reuse_ok(param, loaded_weight) -> bool:
         return False
 
     log.info(
-        "PLE table: mmap matches checkpoint on %d sampled rows in %.1fs; "
-        "skipping the %.1f GiB refill",
-        len(idx),
+        "PLE table: mmap matches the checkpoint on %d sampled 4 KiB windows in "
+        "%.1fs; skipping the %.1f GiB refill",
+        len(offs),
         time.perf_counter() - t0,
-        dst.numel() * dst.element_size() / 2**30,
+        n / 2**30,
     )
     return True
 

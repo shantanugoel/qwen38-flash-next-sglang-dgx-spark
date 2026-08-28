@@ -1,5 +1,6 @@
 # Terminal-Bench 2.1 — fixed 8-task subset (k=1).
-# Dataset: terminal-bench/terminal-bench-2-1 (89 tasks; 2.1 is the 2.0 point-release).
+# Dataset: terminal-bench@2.0 in the Harbor registry (89 tasks). 2.1 is the 2.0
+# point-release and is not separately registered; see RESEARCH_LOG.md.
 # Chosen for mix of easy/medium, no qemu (env-error on this class of box),
 # and overlap with tasks adrienbrault reported on Harbor+terminus-2.
 # One attempt. Report PASS / FAIL / TIMEOUT. Do not raise timeout_multiplier.
