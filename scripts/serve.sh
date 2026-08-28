@@ -80,6 +80,7 @@ docker run -d --name "${CONTAINER}" --init \
   -e HF_TOKEN \
   -e HF_HOME=/huggingface \
   -e SGLANG_QWEN4_PLE_MMAP_DIR=/ple \
+  -e SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN \
   -v "${HF_CACHE}:/huggingface" \
   -v "${SGLANG_CACHE}:/tmp/.cache/sglang" \
   -v "${PLE_DIR}:/ple" \

@@ -226,9 +226,22 @@ the cost shows.
 CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
 ```
 
-plus Qwen static YaRN. **Retest `--mamba-full-memory-ratio 0.3` here** — this is
-the only regime where it can pay off, since memory rather than
-`--max-total-tokens` becomes the binding constraint. Do not make 512k default.
+**The published Qwen YaRN recipe does not apply to this checkpoint.** There is no
+`rope_scaling` field; `text_config.rope_parameters` is **mrope**:
+
+```json
+{"mrope_interleaved": true, "mrope_section": [11, 11, 10],
+ "partial_rotary_factor": 0.25, "rope_theta": 10000000, "rope_type": "default"}
+```
+
+So the override must target `text_config.rope_parameters` and preserve the mrope
+fields, and `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1` must be set or
+`_derive_context_length` refuses 524288 outright. Whether YaRN composes with
+sectioned mrope at all is unknown — a clean failure here is an acceptable
+outcome for an optional feature, but it must be documented as *why*, not as
+"not tried". **Retest `--mamba-full-memory-ratio 0.3` in this step** — it is
+inert at 262k because `--max-total-tokens` binds first, so this is the only
+regime where it can pay off. Do not make 512k default even if it boots.
 
 ### Step 15 — Vision off — **TODO**
 
