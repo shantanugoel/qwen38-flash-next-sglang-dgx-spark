@@ -26,6 +26,9 @@ N="${N:-3}" THINKING=both OUT="${OUTDIR}/decode.json" python3 "${ROOT}/bench/dec
 echo "=== longctx (8k/32k needle + prefix cache) ==="
 SIZES="${SIZES:-8k,32k}" OUT="${OUTDIR}/longctx.json" python3 "${ROOT}/bench/longctx.py" || true
 
+echo "=== agentic session (${TURNS:-40} turns, tools) ==="
+TURNS="${TURNS:-40}" OUT="${OUTDIR}/agentic.json" python3 "${ROOT}/bench/agentic.py" || true
+
 echo "=== server metrics ==="
 python3 - <<'PY'
 import sys, json

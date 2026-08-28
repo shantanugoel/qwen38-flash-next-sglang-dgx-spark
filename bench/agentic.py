@@ -112,6 +112,7 @@ def main() -> int:
     tool_turns = 0
     t0 = time.time()
 
+    last_reply = ""
     for turn in range(1, TURNS + 1):
         if turn == TURNS:
             ask = (
@@ -134,6 +135,7 @@ def main() -> int:
             extra={"tool_choice": "auto"},
         )
 
+        last_reply = r["content"] or r["reasoning"] or ""
         calls = []
         merged: dict = {}
         for i, tc in enumerate(r["tool_calls"]):
@@ -203,7 +205,7 @@ def main() -> int:
                 flush=True,
             )
 
-    final = (rows and msgs[-1].get("content")) or ""
+    final = last_reply
     recalled = "7K-QUARTZ-19" in final.replace(" ", "")
 
     def band(lo, hi):

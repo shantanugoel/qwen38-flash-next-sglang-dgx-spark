@@ -45,7 +45,7 @@ qwen4 = Path("${QWEN4_BACKEND}").read_text()
 qsa = Path("${QSA_BACKEND}").read_text()
 assert "_alloc_ple_table" in qwen4, "PLE mmap helper missing"
 assert "_alloc_ple_table(source_weight.shape" in qwen4
-assert "_ple_reuse_ok" in qwen4, "PLE mmap reuse fast path missing"
+assert "_ple_shard_matches" in qwen4, "PLE mmap reuse fast path missing"
 assert "if is_sm121():" not in qsa, "SM121 SDPA intercept still present"
 assert "is_sm100_supported() or is_sm120_supported()" in qsa, "sm_120 gate missing"
 print("patches ok")

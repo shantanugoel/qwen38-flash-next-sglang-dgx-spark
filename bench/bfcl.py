@@ -188,6 +188,36 @@ def load_split(fname):
     return rows
 
 
+CLASS_DOC = {
+    "GorillaFileSystem": "gorilla_file_system.json",
+    "MathAPI": "math_api.json",
+    "MessageAPI": "message_api.json",
+    "TwitterAPI": "posting_api.json",
+    "TicketAPI": "ticket_api.json",
+    "TradingBot": "trading_bot.json",
+    "TravelAPI": "travel_booking.json",
+    "VehicleControlAPI": "vehicle_control.json",
+}
+
+
+def class_functions(classes) -> list[dict]:
+    """Multi-turn cases carry involved_classes, not an inline function list."""
+    out = []
+    for cls in classes or []:
+        fname = CLASS_DOC.get(cls)
+        if not fname:
+            continue
+        path = DATA / "multi_turn_func_doc" / fname
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    out.append(json.loads(line))
+    return out
+
+
 def load_answers(fname):
     p = DATA / "possible_answer" / fname
     if not p.exists():
@@ -212,7 +242,12 @@ def gt_names(turn_calls):
 
 
 def run_case(case, split, expect, answers, agg):
-    tools = to_tools(case["function"] if isinstance(case["function"], list) else [case["function"]])
+    fns = case.get("function")
+    if fns is None:
+        fns = class_functions(case.get("involved_classes"))
+    elif not isinstance(fns, list):
+        fns = [fns]
+    tools = to_tools(fns)
     tool_names = {t["function"]["name"] for t in tools}
     turns = case["question"]
     msgs: list[dict] = []
