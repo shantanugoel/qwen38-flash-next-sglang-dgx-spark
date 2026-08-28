@@ -551,3 +551,47 @@ cache, and `serve.sh` already carries the mitigation
 statement: **guard on, no corruption observed** — not "the bug is fixed". The
 `--no-enable-prefix-caching` advice in circulation is vLLM-specific (GDN CUBLAS
 bug on sm_121).
+
+---
+
+## Step 10 — Agentic 120 turns with **thinking on** (2026-08-28)
+
+Same prompts, same tools, same server as the thinking-off run.
+
+| turns | median TTFT | median decode | median cache hit | median ctx |
+| --- | ---: | ---: | ---: | ---: |
+| 1–40 | 0.386 s | 32.0 tok/s | 93.6% | 2933 |
+| 41–80 | 0.372 s | 26.6 tok/s | 98.2% | 8452 |
+| 81–120 | **0.290 s** | 24.9 tok/s | **99.4%** | 10962 |
+
+**0 invalid tool calls, late recall PASS**, 597 s wall, final ctx 11596.
+TTFT *falls* as context grows (0.386 → 0.290 s) because the cached prefix keeps
+growing faster than the new suffix.
+
+### The result that matters, and it is not a speed number
+
+| | thinking off | thinking on |
+| --- | ---: | ---: |
+| turns that emitted a tool call | **119 / 120** | **60 / 120** |
+| invalid tool calls | 0 | 0 |
+| decode (last band) | 45.1 tok/s | 24.9 tok/s |
+| cache hit (last band) | 99.0% | 99.4% |
+
+**With thinking on the model calls a tool on half as many turns.** It answers in
+prose instead. This is not a failure — the answers are sane, nothing is
+corrupted, the planted fact still comes back at turn 120 — but for a harness
+that expects a tool call per step and treats "no tool call" as a stall, it is a
+material behaviour change. The turn-120 answer even opens by deliberating about
+whether to disclose the credential it was asked for.
+
+**Implication for the recipe:** thinking on by default is right for reasoning
+quality, but an agent loop should either tolerate prose turns or drive tool-heavy
+phases with `enable_thinking=false` per request. That is a client-side decision
+the recipe should document, not a server flag.
+
+### Corruption, cumulative
+
+~260 tool turns across thinking-off and thinking-on 120-turn sessions plus the
+40-turn runs, radix cache **on**, cache hit 93–99%: **zero invalid tool calls,
+zero corrupted recalls.** With the Mamba guard (`extra_buffer`,
+`track_interval 64`) in place.
