@@ -1,12 +1,11 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 7 upstream campaign:** this recipe's widened TRT-LLM gate for GB10 has
-been superseded by an upstream SM121 correctness fix. Upstream reproduced silent
-decode corruption at 120k–210k; our shorter-context measurements do not
-validate that range. See [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845)
-and the [staged validation plan](UPSTREAM_PLAN.md). **U0 is accepted** (harness plus
-an 8k/32k and 40-turn remeasure of the historical config). U1+ have not started.
-Serving flags and the August 120-turn tables are unchanged.
+**September 7 upstream campaign:** **U1 is accepted.** Sparse decode on GB10 now
+uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
+not a widened TRT-LLM/XQA gate. The later KDA overlay from that PR passed isolated
+tensor replay here and then emitted token-id 0 on a 32k needle; it is not the
+serving default. 8k/32k needles and 120-turn sessions pass on Triton. 120k–210k
+needles are still unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
@@ -14,7 +13,7 @@ Serve [`RadixArk/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/RadixArk/Qwen
 
 - **What:** 125B MoE + 51B n-gram PLE, 6B active, NVFP4 routed experts. The checkpoint is ~135 GB; a Spark has 128 GB. Stock `--ple-offload-embedding` pins the 48 GB PLE table in the *same* UMA pool, so it does not fit.
 - **Why mmap:** a token reads 16 PLE rows (~2.5 KB). File-backed `torch.from_file` keeps the table on NVMe. CUDA graphs still work because the GPU walks the host page tables.
-- **QSA on sm_121:** stock SGLang gates the TRT-LLM sparse decode kernel to SM100. GB10 is SM121, so QSA falls into an FA4 path that does not compile. We widen that gate and (if present) drop a Python-SDPA intercept.
+- **QSA on sm_121:** stock SGLang gates TRT-LLM sparse decode to SM100. GB10 is SM121, so that call would fall into FA4 (does not compile) or, if the gate is widened, FlashInfer XQA (silent token-id-0 garbage). We leave the stock SM100 gate closed and route packed varlen decode through the #36845 2026-08-28 Triton kernel.
 - **MTP:** the 31 draft tensors are still BF16 inside this NVFP4 pack. `--speculative-draft-model-quantization unquant` stops the draft inheriting `modelopt_fp4`.
 - **Non-root:** the container runs as your uid. Hugging Face cache and the PLE backing file stay host-owned.
 
@@ -185,11 +184,30 @@ the task container exits 255 on platform mismatch. `scripts/bench_tb.sh` is
 correct and works from an x86 host pointed at this server over the network. No
 Terminal-Bench number in this repo was measured on a Spark.
 
-## Measured (one GB10, 2026-08-28)
+## Measured (one GB10)
 
 Single stream, `RadixArk/Qwen3.8-Flash-Next-NVFP4`, MTP 3/1/4, `trtllm_mha`
-decode, `triton` prefill, CUDA graphs, radix cache on, **vision on**, 262k
-context, clock-capped GB10. Every number below is from `bench/` in this repo.
+dense decode, QSA sparse decode via #36845 Triton, `triton` prefill, CUDA graphs,
+radix cache on, **vision on**, 262k context, clock-capped GB10. U1 Triton numbers
+are 2026-09-07 (`u1-triton-20260907`). August 28 tables below the U1 block are
+the historical widened-gate recipe and are not the current default.
+
+### U1 corrected baseline (2026-09-07, Triton SM121)
+
+Quality 12/12, 8k and 32k needles exact, 120-turn late recall PASS both thinking
+modes, 0 invalid tool calls. Isolated kernel check: TRT-LLM gated off, wrapper
+`_qsa_sm121_triton_varlen`, Triton rel-L2 ~0 vs FP32, CUDA-graph replay 0.000.
+Boot 580 s with `128/128 shards already on disk`. Decode medians: code 40.63
+(39.37–41.31) off / 31.91 (31.07–34.22) on; prose 23.42 (19.64–23.64) off /
+25.66 (24.31–27.51) on — within the usual ±5% of U0.
+
+| 120-turn | TTFT bands | decode bands | tools | wall | ctx |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| thinking off | 0.57 / 0.57 / 0.57 s | 49.2 / 49.0 / 48.8 tok/s | 119/120 | 166 s | 14605 |
+| thinking on | 0.53 / 0.49 / 0.44 s | 34.1 / 30.5 / 33.1 tok/s | 119/120 | 539 s | 20217 |
+
+32k needle 10.40 s first / 0.50 s resend (20.9×). **Not a 120k+ test.** The KDA
+overlay on this same image failed that 32k needle with 64× token id 0.
 
 ### Long-horizon agentic session — what this recipe is for
 
@@ -282,6 +300,8 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | `MAX_RUNNING=1` | No gain, **+21% wall clock** on a 40-turn session |
 | `PREFILL=1024` | 32k TTFT **12.31 s vs 10.37 s** at 4096 — smaller chunks cost TTFT |
 | `--language-only` (vision off) | **Does not disable vision.** It is for encoder *disaggregation*; with no encoder service configured the local tower still runs and still answers image questions correctly. 89 MiB and 0 KV difference — there was never a headroom argument |
+| Widened TRT-LLM QSA gate (`is_sm120_supported()`) | **Rejected.** On SM121 that call is XQA, not trtllm-gen. Silent token-id-0 loops from ~120k. Retired by #36806/#36845 |
+| #36845 KDA SM121 overlay on this image | **Rejected for serving.** Isolated rel-L2 ≤ 0.0024 and CUDA-graph replay passed; a 32k needle then returned 64× `!`. Triton-only on the same stack passed |
 
 ### Vision
 
@@ -311,4 +331,4 @@ no surviving explanation, it is not a tuning lead, and it is not an argument for
 
 - Model: Qwen / Alibaba. NVFP4: [RadixArk](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 - Engine: [SGLang](https://github.com/sgl-project/sglang) (`qwen4_exp`).
-- PLE mmap + SM120 QSA gate: adapted from [hashd1ve/qwen38-flash-next-one-dgx-spark](https://github.com/hashd1ve/qwen38-flash-next-one-dgx-spark) (MIT).
+- PLE mmap and SM121 QSA Triton backport: adapted from [hashd1ve/qwen38-flash-next-one-dgx-spark](https://github.com/hashd1ve/qwen38-flash-next-one-dgx-spark) (MIT) and [sglang#36845](https://github.com/sgl-project/sglang/pull/36845) (Apache-2.0).

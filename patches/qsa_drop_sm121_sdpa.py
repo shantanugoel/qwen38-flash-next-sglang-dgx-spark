@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Remove an SM121 SDPA intercept so sparse decode can reach TRT-LLM.
+"""Remove an SM121 SDPA intercept so sparse decode can reach the varlen path.
 
 Some Spark images return `_forward_sm121_sdpa_sparse` on `is_sm121()` before
-`_resolve_trtllm_sparse_decode()`. Stock `lmsysorg/sglang:qwen38flashnext` has
-no intercept; this patch is then a no-op.
+either TRT-LLM or the packed-varlen fallback. Stock
+`lmsysorg/sglang:qwen38flashnext` has no intercept; this patch is then a no-op.
+On GB10 the working decode path is the #36845 packed-varlen kernel, not a
+widened TRT-LLM gate.
 
 Usage: python3 qsa_drop_sm121_sdpa.py <path to qwen_sparse_attn_backend.py>
 """

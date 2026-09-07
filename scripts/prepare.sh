@@ -28,16 +28,29 @@ qwen4_path="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
   'import sglang.srt.models.qwen4_exp as m; print(m.__file__)' | tail -1)"
 qsa_path="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
   'import sglang.srt.layers.attention.qwen_sparse_attn_backend as m; print(m.__file__)' | tail -1)"
+kernels_dir="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
+  'import sglang.kernels as k; print(k.__path__[0])' | tail -1)"
 printf '%s\n' "${qwen4_path}" > "${BUILD}/path_qwen4_exp.txt"
 printf '%s\n' "${qsa_path}" > "${BUILD}/path_qsa.txt"
+printf '%s\n' "$(dirname "${qsa_path}")/qsa/sm121_varlen.py" > "${BUILD}/path_sm121_varlen.txt"
+printf '%s\n' "${kernels_dir}/kda_kernels" > "${BUILD}/path_kda_kernels.txt"
 extract "${qwen4_path}" "${QWEN4_BACKEND}"
 extract "${qsa_path}" "${QSA_BACKEND}"
 
 python3 "${ROOT}/patches/ple_mmap.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/ple_reuse.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/qsa_drop_sm121_sdpa.py" "${QSA_BACKEND}"
-python3 "${ROOT}/patches/qsa_trtllm_sm120.py" "${QSA_BACKEND}"
-python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}"
+python3 "${ROOT}/patches/qsa_sm121_triton.py" "${QSA_BACKEND}"
+
+cp "${ROOT}/patches/qsa_sm121_varlen.py" "${BUILD}/sm121_varlen.py"
+rm -rf "${BUILD}/kda_kernels"
+cp -R "${ROOT}/patches/kda_kernels" "${BUILD}/kda_kernels"
+
+python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}" \
+  "${BUILD}/sm121_varlen.py" \
+  "${BUILD}/kda_kernels/__init__.py" \
+  "${BUILD}/kda_kernels/qwen38_qsa_sm121/__init__.py" \
+  "${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py"
 
 python3 - <<PY
 from pathlib import Path
@@ -46,8 +59,13 @@ qsa = Path("${QSA_BACKEND}").read_text()
 assert "_alloc_ple_table" in qwen4, "PLE mmap helper missing"
 assert "_alloc_ple_table(source_weight.shape" in qwen4
 assert "_ple_shard_matches" in qwen4, "PLE mmap reuse fast path missing"
-assert "if is_sm121():" not in qsa, "SM121 SDPA intercept still present"
-assert "is_sm100_supported() or is_sm120_supported()" in qsa, "sm_120 gate missing"
+assert "return self._forward_sm121_sdpa_sparse" not in qsa, "SM121 SDPA intercept still present"
+assert "is_sm100_supported() or is_sm120_supported()" not in qsa, (
+    "widened TRT-LLM gate still present")
+assert "kda_kernels.qwen38_qsa_sm121" not in qsa, "KDA serving route must stay off"
+assert "qsa.sm121_varlen" in qsa, "Triton SM121 route missing"
+assert Path("${BUILD}/sm121_varlen.py").is_file()
+assert Path("${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py").is_file()
 print("patches ok")
 PY
 

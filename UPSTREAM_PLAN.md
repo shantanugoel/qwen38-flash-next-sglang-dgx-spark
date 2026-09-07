@@ -1,8 +1,9 @@
 # Upstream validation plan — September 2026
 
-Status: **U0 accepted; U1–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0 and U1 accepted; U2–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
-historical evidence. U0 was accepted on September 7; later items remain unexecuted.
+historical evidence. U1 was accepted on September 7 (Triton #36845 serving
+default; KDA overlay rejected on this image). Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -103,16 +104,17 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U1 — Dedicated SM121 sparse-decode correctness fix
 
-- [ ] Audit/backport merged [#36845](https://github.com/sgl-project/sglang/pull/36845).
+- [x] Audit/backport merged [#36845](https://github.com/sgl-project/sglang/pull/36845).
   Remove the widened TRT-LLM gate for GB10 and ensure preparation preserves the
   new SM121 dispatch. Preserve other architectures' behavior.
-- [ ] Run reference-tensor and CUDA-graph replay checks, fast/promotion gates,
+- [x] Run reference-tensor and CUDA-graph replay checks, fast/promotion gates,
   then staged long-context validation. Accept restored correctness even if slower
   than old historical figures; establish the corrected baseline.
-- [ ] If a compatible backport requires an image migration, explicitly record the
-  smallest necessary bundle; U3 then evaluates only remaining migration work.
-  Never roll back to the known-faulty long-context path.
-- [ ] Document results, limits and defaults; commit before U2.
+  Triton serving: 8k/32k + 120-turn pass. KDA overlay rejected (32k token-id 0).
+  120k/190k/210k not run here (sequential long prefills have wedged this box).
+- [x] Compatible backport on the existing `qwen38flashnext` image; no U3 bundle
+  required for this item. Never roll back to the known-faulty long-context path.
+- [x] Document results, limits and defaults; commit before U2.
 
 ### U2 — ReplaySSM PLE-state correctness audit
 

@@ -106,6 +106,6 @@ def inventory(image, container):
               'sources': {str(p.relative_to(ROOT)): sha(p) for p in
                           [*sorted((ROOT / 'scripts').glob('*.*')),
                            *sorted((ROOT / 'bench').glob('*.py')),
-                           *sorted((ROOT / 'patches').glob('*.py')),
-                           *sorted((ROOT / 'build').glob('*.py'))] if p.is_file()}}
+                           *sorted((ROOT / 'patches').rglob('*.py')),
+                           *sorted((ROOT / 'build').rglob('*.py'))] if p.is_file()}}
     return result

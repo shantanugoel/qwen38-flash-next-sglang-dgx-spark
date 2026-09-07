@@ -97,7 +97,7 @@ def needle_and_cache(label: str, tokens: int) -> dict:
 
 
 def main() -> int:
-    mapping = {"8k": 8000, "32k": 32000, "40k": 40000, "128k": 128000}
+    mapping = {"8k": 8000, "32k": 32000, "40k": 40000, "120k": 120000, "128k": 128000, "190k": 190000, "210k": 210000}
     rows = []
     for part in SIZES.split(","):
         part = part.strip()

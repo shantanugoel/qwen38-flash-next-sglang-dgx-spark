@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Enable the QSA trtllm-gen decode kernel on sm_120/121 (consumer Blackwell).
+"""DEPRECATED. Do not apply on GB10 / SM121.
+
+Widens `_resolve_trtllm_sparse_decode` to `is_sm120_supported()`. On SM121 that
+call does not run trtllm-gen (no sm12x cubins); with backend=auto it routes to
+XQA, which silently corrupts long-context decode (runs of token id 0 from
+~120k). Retired by sglang#36806 / #36845. This recipe now uses qsa_sm121_triton.py.
 
 Adapted from hashd1ve/qwen38-flash-next-one-dgx-spark (MIT) @ 04d0735.
-
-`_resolve_trtllm_sparse_decode` drops the kernel when `is_sm100_supported()` is
-false. GB10 is (12, 1). flashinfer ships the kernel; the FA4 cute fallback
-does not compile on SM120.
 
 Usage: python3 qsa_trtllm_sm120.py <path to qwen_sparse_attn_backend.py>
 """

@@ -3,7 +3,7 @@
 **Current campaign:** [September upstream validation plan](UPSTREAM_PLAN.md).
 The August plan below is historical; stale TODO/status and skip-list entries do
 not authorize rerunning completed experiments. See RESEARCH_LOG.md for outcomes.
-U0 is accepted; later campaign items have not started.
+U0 and U1 are accepted; later campaign items have not started.
 
 Goal: keep a **single DGX Spark / GB10** recipe, stay on **Radix NVFP4**, and raise
 quality then speed for long-horizon agentic work (search/scrape/facts/tools/code/prose,
@@ -30,7 +30,7 @@ rule at every step so a later agent cannot “just wait” on an 8–20 min boot
 ## What we already know (do not re-learn)
 
 Current public recipe (`scripts/serve.sh`): SGLang `lmsysorg/sglang:qwen38flashnext`,
-PLE `torch.from_file` mmap, QSA SM120 gate, MTP NEXTN 3/1/4 + `unquant`, decode
+PLE `torch.from_file` mmap, QSA SM121 Triton (#36845), MTP NEXTN 3/1/4 + `unquant`, decode
 `trtllm_mha`, prefill `triton`, CUDA graphs on, `--mem-fraction-static 0.95`,
 `--context-length 262144`, `--chunked-prefill-size 4096`, `--max-running-requests 4`.
 

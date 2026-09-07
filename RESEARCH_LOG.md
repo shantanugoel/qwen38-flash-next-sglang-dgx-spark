@@ -1211,3 +1211,83 @@ still well within one-run noise and a different tokenize preflight. Not a 120k+ 
 This is not the 120-turn promotion gate. `spec_accept_length` was not dumped by the new
 suite. Vision positional smoke still passed. Recipe defaults stay.
 
+
+## U1 — Dedicated SM121 sparse-decode correctness fix (2026-09-07)
+
+**Decision: accepted (Triton #36845 serving default). KDA overlay rejected on
+this image.** Rollback of the serving path is the 2026-08-28 Triton kernel, not
+the widened TRT-LLM gate and not KDA. Next item is U2.
+
+TAGs: `u1-kda-20260907` (fail), `u1-triton-20260907` (pass).
+Commands (detached): `PROFILE=u1 TAG=<tag> nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Image unchanged: `sha256:64c58f100438fa5f036bdfbeb3edd3136fb12c5d22d8ae52786c4a701263c55d`.
+Checkpoint and PLE identity unchanged from U0. Clocks still 208 / 3003 MHz.
+
+### What changed
+
+Stock `_resolve_trtllm_sparse_decode` stays SM100-only (no `is_sm120_supported()`
+widening). SM121 packed varlen decode is inserted at
+`_resolve_flash_attn_varlen_func`. Other architectures keep FA2/FA4. No image
+migration.
+
+Two kernels were measured:
+
+1. **KDA** (`patches/qsa_sm121_kda.py` + `patches/kda_kernels/`, sglang#36845
+   2026-08-30). Isolated: TRT-LLM `None`, wrapper `_qsa_sm121_kda_varlen`,
+   rel-L2 ≤ 0.0024 vs FP32, CUDA-graph replay 0.000. Serving log:
+   `Using the Codex/Kimi K3 KDA Qwen3.8 QSA kernel on SM121`.
+2. **Triton** (`patches/qsa_sm121_triton.py` + `patches/qsa_sm121_varlen.py`,
+   sglang#36845 2026-08-28). Isolated: wrapper `_qsa_sm121_triton_varlen`,
+   Triton rel-L2 ~0, KDA package still present for comparison. Serving log:
+   `Using sglang#36845 2026-08-28 Triton SM121 QSA varlen fallback`.
+
+`prepare.sh` applies Triton only. Serve mounts `sm121_varlen.py`, not KDA.
+`PROFILE=u1` runs the isolated kernel check before boot and refuses a KDA boot
+log.
+
+### KDA serving (`u1-kda-20260907`) — fail
+
+Boot 594 s, PLE 128/128 reused, watchdog did not trip. Smoke pass, decode in
+noise of U0, quality **11/12** (`effort_thinking_off` answered `22` not `24`),
+**32k needle 64× `!` (token id 0)**, 8k needle PASS, 120-turn thinking-off late
+recall FAIL, thinking-on late recall PASS with a disclosure-style refusal.
+Invalid tool calls 0. This is the silent-garbage signature U1 was meant to
+remove. Isolated numerics did not predict it.
+
+### Triton serving (`u1-triton-20260907`) — pass
+
+Boot 580 s. Isolated kernel check pass. Suites: smoke, quality 12/12, decode,
+8k/32k longctx, 120-turn agentic off/on — all pass, 0 invalid tool calls,
+`stop_exit_code=0`.
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 40.63 (39.37–41.31) | 31.91 (31.07–34.22) |
+| prose ES | 23.42 (19.64–23.64) | 25.66 (24.31–27.51) |
+
+U0 was 39.26 / 32.73 code and 22.17 / 26.53 prose. No material decode
+regression; correctness was the accept criterion.
+
+| Longctx | first s | resend s | speedup | needle |
+| --- | ---: | ---: | ---: | --- |
+| 8k (5885 tok) | 3.31 | 0.57 | 5.9× | PASS |
+| 32k (23555 tok) | 10.40 | 0.50 | 20.9× | PASS |
+
+| 120-turn | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 166 s | 119/120 | 0 | PASS | 49.2 / 49.0 / 48.8 tok/s |
+| thinking on | 539 s | 119/120 | 0 | PASS | 34.1 / 30.5 / 33.1 tok/s |
+
+Thinking-on tool frequency was 119/120 this run (August spread was 60 and 101).
+Recorded as another point on "unpredictable", not a new claim.
+
+### Limits
+
+- **120k / 190k / 210k needles were not run.** That is the published XQA-bug
+  regime. Sequential long prefills have wedged this box; U1 staged 32k first,
+  which was enough to reject KDA. hashd1ve reported 4/4 exact needles at those
+  sizes on this Triton kernel. Do not treat 32k as a 210k clearance.
+- KDA is kept in-tree for isolated comparison (`patches/kda_kernels/`,
+  `patches/qsa_sm121_kda.py`) and must not be applied by `prepare.sh`.
+- `qsa_trtllm_sm120.py` is deprecated and must not be applied on SM121.
+

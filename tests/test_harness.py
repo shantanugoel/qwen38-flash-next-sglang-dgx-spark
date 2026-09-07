@@ -235,4 +235,73 @@ class RequestDeadlineTests(unittest.TestCase):
                     with self.assertRaises(TimeoutError):fn([{'role':'user','content':'test'}])
         finally:server.shutdown();server.server_close()
 
+
+class QsaPatchTests(unittest.TestCase):
+    def load_patcher(self):
+        spec = importlib.util.spec_from_file_location(
+            'qsa_sm121_kda', ROOT / 'patches/qsa_sm121_kda.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_kda_route_rejects_widened_gate_and_is_idempotent(self):
+        mod = self.load_patcher()
+        src = ('def _resolve_flash_attn_varlen_func():\n'
+               '    try:\n'
+               '        from flash_attn import flash_attn_varlen_func\n'
+               '        return flash_attn_varlen_func\n'
+               '    except ImportError:\n'
+               '        pass\n')
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'backend.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            patched = path.read_text()
+            self.assertIn('kda_kernels.qwen38_qsa_sm121', patched)
+            self.assertIn('qsa.sm121_varlen', patched)
+            self.assertNotIn('is_sm100_supported() or is_sm120_supported()', patched)
+            self.assertEqual(mod.main(str(path)), 0)
+            wide = Path(d) / 'wide.py'
+            wide.write_text('if not (is_sm100_supported() or is_sm120_supported()):\n' + src)
+            self.assertEqual(mod.main(str(wide)), 1)
+
+    def test_triton_route_rejects_kda_and_widened_gate(self):
+        spec = importlib.util.spec_from_file_location(
+            'qsa_sm121_triton', ROOT / 'patches/qsa_sm121_triton.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = ('def _resolve_flash_attn_varlen_func():\n'
+               '    try:\n'
+               '        from flash_attn import flash_attn_varlen_func\n'
+               '        return flash_attn_varlen_func\n'
+               '    except ImportError:\n'
+               '        pass\n')
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'backend.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            patched = path.read_text()
+            self.assertIn('_qsa_sm121_triton_varlen', patched)
+            self.assertIn('qsa.sm121_varlen', patched)
+            self.assertNotIn('kda_kernels.qwen38_qsa_sm121', patched)
+            self.assertEqual(mod.main(str(path)), 0)
+            kda = Path(d) / 'kda.py'
+            kda.write_text('from sglang.kernels.kda_kernels.qwen38_qsa_sm121 import x\n' + src)
+            self.assertEqual(mod.main(str(kda)), 1)
+            wide = Path(d) / 'wide.py'
+            wide.write_text('if not (is_sm100_supported() or is_sm120_supported()):\n' + src)
+            self.assertEqual(mod.main(str(wide)), 1)
+
+    def test_only_runs_named_suites(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            with patch('experiment.bounded', return_value=0):
+                self.assertEqual(suites(out, {'ONLY': 'smoke', 'SUITE_TIMEOUT': '1'}), 0)
+            result = json.loads((out / 'suite_status.json').read_text())
+            self.assertEqual([r['name'] for r in result['suites']], ['smoke'])
+            self.assertEqual(result['status'], 'pass')
+            with self.assertRaises(ValueError):
+                suites(out, {'ONLY': 'no-such-suite'})
+
+
 if __name__ == '__main__': unittest.main()

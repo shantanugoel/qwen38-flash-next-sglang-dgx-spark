@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Serve Flash-Next NVFP4. Detached docker run, non-root, PLE mmap + QSA sm_120
-# + MTP 3/1/4 unquant + CUDA graphs. Default bind 127.0.0.1:30000.
+# Serve Flash-Next NVFP4. Detached docker run, non-root, PLE mmap + QSA SM121
+# Triton varlen (#36845, 2026-08-28) + MTP 3/1/4 unquant + CUDA graphs.
+# Default bind 127.0.0.1:30000.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +51,7 @@ else
 fi
 
 docker image inspect "${IMAGE}" >/dev/null
-[[ -f "${QWEN4_BACKEND}" && -f "${QSA_BACKEND}" ]] || {
+[[ -f "${QWEN4_BACKEND}" && -f "${QSA_BACKEND}" && -f "${BUILD}/sm121_varlen.py" ]] || {
   echo "patches missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
@@ -58,13 +59,14 @@ docker image inspect "${IMAGE}" >/dev/null
   echo "checkpoint missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
-[[ -f "${BUILD}/path_qwen4_exp.txt" && -f "${BUILD}/path_qsa.txt" ]] || {
+[[ -f "${BUILD}/path_qwen4_exp.txt" && -f "${BUILD}/path_qsa.txt" && -f "${BUILD}/path_sm121_varlen.txt" ]] || {
   echo "in-image paths missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
 
 QWEN4_IN_IMAGE="$(cat "${BUILD}/path_qwen4_exp.txt")"
 QSA_IN_IMAGE="$(cat "${BUILD}/path_qsa.txt")"
+SM121_IN_IMAGE="$(cat "${BUILD}/path_sm121_varlen.txt")"
 UIDGID="$(docker_user)"
 extra_gpu_groups
 mkdir -p "${PLE_DIR}" "${SGLANG_CACHE}"
@@ -93,6 +95,7 @@ docker run -d --name "${CONTAINER}" --init \
   -v "${PLE_DIR}:/ple" \
   -v "${QWEN4_BACKEND}:${QWEN4_IN_IMAGE}:ro" \
   -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro" \
+  -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro" \
   "${IMAGE}" \
   sglang serve \
     --model-path "${MODEL}" \

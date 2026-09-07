@@ -68,6 +68,11 @@ def suites(out, env, guard=None):
         for mode in ('off', 'on'):
             tasks.append(('agentic_' + mode, [sys.executable, str(ROOT / 'bench/agentic.py')],
                           {'THINKING': mode, 'TURNS': env.get('TURNS', '40')}))
+    if only := env.get('ONLY'):
+        wanted = {name.strip() for name in only.split(',') if name.strip()}
+        tasks = [t for t in tasks if t[0] in wanted]
+        if not tasks:
+            raise ValueError('ONLY matched no suites: ' + only)
     for name, args, overrides in tasks:
         print('START suite:', name, flush=True)
         child_env = {**env, **overrides, 'OUT': str(out / (name + '.json'))}
@@ -161,10 +166,9 @@ def run(out, env):
     (out / 'inventory_before.json').write_text(json.dumps(initial, indent=2))
     preserved = out / 'preserved'; preserved.mkdir()
     for folder in ('build', 'patches', 'scripts', 'bench'):
-        dst = preserved / folder; dst.mkdir()
-        for p in (ROOT / folder).glob('*'):
-            if p.is_file() and p.suffix in ('.py', '.sh', '.txt'):
-                shutil.copy2(p, dst / p.name)
+        shutil.copytree(ROOT / folder, preserved / folder,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.log'),
+                        dirs_exist_ok=True)
     # Local tag retains the exact original image without exporting multi-GB layers.
     command(['docker', 'tag', initial['image_id'], 'qwen38-u0-preserved:' + env['TAG']])
     identity = ple_identity(env['SNAPSHOT'], env['PLE_DIR'], env['RECIPE_MODEL'], env['REVISION'])
@@ -206,6 +210,12 @@ def run(out, env):
         watch = subprocess.Popen(args, stdout=watch_log, stderr=subprocess.STDOUT, start_new_session=True)
         watch_log.close()
         owned = True
+        if env.get('QSA_KERNEL_CHECK') == '1':
+            print('START qsa kernel check', flush=True)
+            if bounded(['bash', str(ROOT / 'scripts/bench_qsa_kernels.sh')],
+                       out / 'qsa_kernel.log', float(env.get('KERNEL_TIMEOUT', '600')), env, guard):
+                raise RuntimeError('QSA SM121 kernel check failed; inspect qsa_kernel.log')
+            print('RESULT qsa kernel check: pass', flush=True)
         if bounded(['bash', str(ROOT / 'scripts/serve.sh')], out / 'serve.log', 90, env, guard):
             raise RuntimeError('serve failed; inspect serve.log')
         effective(container, None, out)  # versions survive even a failed warmup
@@ -224,9 +234,17 @@ def run(out, env):
         boot_proc = subprocess.run(['docker', 'logs', '--tail', '2000', container],
             capture_output=True, text=True, timeout=15)
         boot_log = boot_proc.stdout + boot_proc.stderr
-        (out / 'boot-facts.txt').write_text('\n'.join(line for line in boot_log.splitlines()
+        facts = '\n'.join(line for line in boot_log.splitlines()
             if any(key in line for key in ('shards already on disk', 'KV Cache',
-                'max_total_num_tokens=', 'CUDA graph', 'Load weight end'))))
+                'max_total_num_tokens=', 'CUDA graph', 'Load weight end',
+                'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
+                'Triton SM121 QSA')))
+        (out / 'boot-facts.txt').write_text(facts)
+        if env.get('QSA_KERNEL_CHECK') == '1':
+            if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
+                raise RuntimeError('KDA SM121 kernel selected; Triton-only serving is required')
+            if 'Triton SM121 QSA' not in facts:
+                raise RuntimeError('Triton SM121 QSA route did not log at boot')
         env['MODEL'] = env['SERVED_NAME']
         rc = suites(out, env, guard)
         result['status'] = 'pass' if rc == 0 else 'fail'
@@ -273,6 +291,12 @@ def main():
             if env.get('SIZES', '8k,32k') != '8k,32k' or int(env.get('TURNS', '40')) > 40:
                 raise SystemExit('U0 restricts baseline to 8k/32k and <=40 tool turns')
             env['MAX_PROMPT_TOKENS'] = '32768'
+        elif env.get('PROFILE') == 'u1':
+            env.setdefault('TURNS', '120')
+            env.setdefault('SIZES', '8k,32k')
+            env.setdefault('SUITE_TIMEOUT', '1800')
+            env.setdefault('REQUEST_TIMEOUT', '900')
+            env.setdefault('QSA_KERNEL_CHECK', '1')
         try:
             if sys.argv[1:] == ['run']:
                 return run(out, env)
