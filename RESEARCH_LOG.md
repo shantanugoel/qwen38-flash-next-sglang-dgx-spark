@@ -1103,3 +1103,32 @@ correctly naming `ops/secrets.md` as the source. Recall was intact. The bench
 scores that as a failed recall, which is wrong — the metric cannot distinguish
 "forgot" from "remembered and refused". Recorded rather than silently re-run
 until it passed.
+
+
+## September 7 — Upstream audit and staged plan (documentation only)
+
+User requested an ordered plan, with docs updated and a commit after every item
+before moving to the next. Added UPSTREAM_PLAN.md; no experiments started.
+
+Read-only upstream findings that supersede parts of the August discussion:
+
+- RadixArk revision is unchanged. The SGLang image tag has been rebuilt; a newer
+  ARM64 model-development image also exists. Version details are in the plan.
+- Our widened SM121 TRT-LLM gate was superseded by correctness fix #36845, merged
+  August 30 into qwen4-main-squashed. Upstream reproduced corruption at 120k–210k;
+  our shorter tests do not clear it. Correctness now precedes speed tuning.
+- Native PLE backend #37068, TP prefetch correction #38123 and NVIDIA mixed-quant
+  loader #38121 merged into that branch September 5. Model support #36497 remains
+  open against main. Native PLE still rewrites weights every boot, so migration
+  must preserve validated reuse.
+- Open #37794 reports skipped PLE commits in ReplaySSM speculation. Local
+  applicability is not yet established; audit it separately from NGRAM additions.
+- NVIDIA's new checkpoint has published evaluations and FP8 MTP experts; the old
+  claim that RadixArk is the only evaluated candidate is no longer current.
+- vLLM prefix caching must be evaluated on the selected current stack; the old
+  unconditional exclusion is not a current compatibility finding.
+
+The README now flags the known upstream QSA concern and links the plan. The
+EXPLORATION header marks its old status entries as historical. Future per-item
+entries must record accepted/rejected/deferred, evidence, rollback, and commit
+before the next item. Existing performance figures were not remeasured.

@@ -1,5 +1,12 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
+**September 7 upstream audit:** this recipe's widened TRT-LLM gate for GB10 has
+been superseded by an upstream SM121 correctness fix. Upstream reproduced silent
+decode corruption at 120k–210k; our shorter-context August measurements do not
+validate that range. See [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845)
+and the [staged validation plan](UPSTREAM_PLAN.md). No migration or new benchmark
+has been performed yet; the implementation and results below describe the August recipe.
+
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
 Serve [`RadixArk/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4) with **SGLang** (128 GB unified memory). Native 262k context, MTP speculative decode, CUDA graphs.
