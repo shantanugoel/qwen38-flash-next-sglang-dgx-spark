@@ -7,6 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/common.sh"
 load_hf_token
+# Experiment identity was validated before launch; .env cannot change it later.
+if [[ -n "${EXPERIMENT_IMAGE_ID:-}" ]]; then
+  IMAGE="${EXPERIMENT_IMAGE_ID}"
+  MODEL="${RECIPE_MODEL:?}"
+  REVISION="${EXPERIMENT_REVISION:?}"
+  PLE_DIR="${EXPERIMENT_PLE_DIR:?}"
+fi
 require_spark
 
 PORT="${PORT:-30000}"

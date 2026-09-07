@@ -3,10 +3,62 @@
 from __future__ import annotations
 
 import json
+import signal
+from contextlib import contextmanager
+from functools import wraps
 import os
 import time
 import urllib.error
 import urllib.request
+
+
+@contextmanager
+def deadline(seconds):
+    """A total wall-clock deadline, including a stream that keeps sending bytes."""
+    def expired(signum, frame):
+        raise TimeoutError("request wall-clock deadline exceeded")
+    old = signal.signal(signal.SIGALRM, expired)
+    previous = signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous)
+        signal.signal(signal.SIGALRM, old)
+
+
+def bounded_request(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        seconds = float(os.environ.get("REQUEST_TIMEOUT", "300"))
+        if "timeout" in kwargs:
+            seconds = min(seconds, float(kwargs["timeout"]))
+        if seconds <= 0:
+            raise ValueError("REQUEST_TIMEOUT must be positive")
+        kwargs["timeout"] = seconds
+        with deadline(seconds):
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def check_prompt(body):
+    limit = os.environ.get("MAX_PROMPT_TOKENS")
+    if not limit:
+        return
+    # U0 preflight renders/tokenizes the chat template before generation.
+    # Image expansion is not counted here; U0 uses only its fixed small image.
+    req = urllib.request.Request(base() + "/tokenize", data=json.dumps({
+        "model": body["model"], "messages": body["messages"],
+        **{k: body[k] for k in ("tools", "chat_template_kwargs", "reasoning_effort", "tool_choice") if k in body}
+    }).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as response:
+        data = json.load(response)
+    count = data.get("count", data.get("num_tokens"))
+    if count is None and isinstance(data.get("tokens"), list):
+        count = len(data["tokens"])
+    if count is None:
+        raise RuntimeError("tokenize did not report a token count; refusing unchecked U0 request")
+    if count > int(limit):
+        raise ValueError("request exceeds U0 short-context ceiling")
 
 
 def base() -> str:
@@ -17,6 +69,7 @@ def model() -> str:
     return os.environ.get("MODEL", "qwen38-flash-next-nvfp4-mtp")
 
 
+@bounded_request
 def chat(
     messages,
     *,
@@ -46,6 +99,7 @@ def chat(
         body["tools"] = tools
     if extra:
         body.update(extra)
+    check_prompt(body)
     req = urllib.request.Request(
         base() + "/v1/chat/completions",
         data=json.dumps(body).encode(),
@@ -86,6 +140,7 @@ def tok_s(r: dict) -> float:
     return ct / r["seconds"] if r["seconds"] and ct else 0.0
 
 
+@bounded_request
 def chat_stream(
     messages,
     *,
@@ -123,6 +178,7 @@ def chat_stream(
         body["tools"] = tools
     if extra:
         body.update(extra)
+    check_prompt(body)
     req = urllib.request.Request(
         base() + "/v1/chat/completions",
         data=json.dumps(body).encode(),

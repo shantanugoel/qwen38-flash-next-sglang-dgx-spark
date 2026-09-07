@@ -1,11 +1,12 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 7 upstream audit:** this recipe's widened TRT-LLM gate for GB10 has
+**September 7 upstream campaign:** this recipe's widened TRT-LLM gate for GB10 has
 been superseded by an upstream SM121 correctness fix. Upstream reproduced silent
-decode corruption at 120k–210k; our shorter-context August measurements do not
+decode corruption at 120k–210k; our shorter-context measurements do not
 validate that range. See [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845)
-and the [staged validation plan](UPSTREAM_PLAN.md). No migration or new benchmark
-has been performed yet; the implementation and results below describe the August recipe.
+and the [staged validation plan](UPSTREAM_PLAN.md). **U0 is accepted** (harness plus
+an 8k/32k and 40-turn remeasure of the historical config). U1+ have not started.
+Serving flags and the August 120-turn tables are unchanged.
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
@@ -50,6 +51,51 @@ Stop: `./scripts/stop.sh`. Default bind is `127.0.0.1`. LAN: `BIND_ADDR=0.0.0.0 
 | `HF_CACHE` | `$HF_HOME` or `~/.cache/huggingface` |
 | `PLE_DIR` | `./data/ple` (sparse ~48 GB backing file) |
 | `IMAGE` | `lmsysorg/sglang:qwen38flashnext` |
+
+## Controlled experiments
+
+Use `scripts/run_config.sh` in a detached session with a unique TAG and redirect
+its output under `results/`. It now owns the whole lifecycle: inventory, original
+image/source preservation, sampled checkpoint/PLE identity validation, llama-swap
+unload, GPU-idle check, guarded startup, bounded benchmark suites, and graceful
+shutdown. **The experiment server is stopped at the end**, including a failed
+run; `scripts/serve.sh` remains the standalone serving entry point.
+
+The shared `results/.bench.lock` covers restart and all suites. Benchmark-only
+`scripts/bench_fast.sh` uses that same lock but does not own/restart/stop its
+existing server. Tags cannot overwrite earlier evidence. Inspect
+`results/<TAG>/suite_status.json` and `experiment_status.json`: process exit codes,
+missing/malformed reports, failed quality/needle checks and invalid tool calls
+all prevent a passing verdict. Suites have individual logs and JSON artifacts.
+
+Default limits: startup 1500 seconds (`BOOT_WAIT`), each suite 900 seconds
+(`SUITE_TIMEOUT`), each API request 300 seconds (`REQUEST_TIMEOUT`, total wall
+clock including streaming). Deadlines kill the benchmark's process group.
+`PROFILE=u0` restricts the harness to 8k/32k tests and at most 40 tool turns,
+with a 32768-token text/chat preflight ceiling. The fixed small positional image
+smoke remains enabled. This does not limit arbitrary callers to the server.
+
+The non-root watchdog samples every five seconds. It stops the experiment after
+15 seconds below 6 GiB MemAvailable, or below 0.5 GiB MemFree while MemAvailable
+is below 10 GiB; more than 0.5 GiB new swap use also trips it. New NVIDIA Xids
+trigger immediate shutdown. `NV_ERR_NO_MEMORY` in *new* kernel messages uses the
+same 15-second sustain window: this host logs one-shot allocation failures during
+CUDA graph capture even when the server becomes healthy. Matching journal lines
+are stored on a trip. Free-memory gating avoids treating a large reclaimable file
+cache as exhaustion. These U0 thresholds preserve margin above exhaustion while
+allowing the historical ~1 GiB free baseline; they are not a validation of large
+prefills. `MEMWATCH_AVAILABLE`, `MEMWATCH_FREE`, `MEMWATCH_FREE_GATE`, and
+`MEMWATCH_SUSTAIN` configure the controller's policy. Watchdog process loss aborts
+the active experiment. Memory samples and shutdown evidence stay in the tag's
+results directory. `python3 tests/test_harness.py` covers the detector, lock,
+deadlines, PLE identity, and suite verdicts.
+
+PLE identity records live in `results/ple-identities`, not under the external
+cache. The current guard supports the existing FP8 TP1 layout and requires its
+backing file to exist. It checks every shard's first/middle/last byte windows,
+records model/revision/config/index identity, and refuses reuse across registered
+checkpoint identities. Sampling is not a full-file integrity checksum. A new
+backend/checkpoint will need an explicit identity migration in its plan item.
 
 ## Boot time
 

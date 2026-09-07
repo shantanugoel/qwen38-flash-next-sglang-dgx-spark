@@ -1,8 +1,8 @@
 # Upstream validation plan — September 2026
 
-Status: **planned, not executed**. This supersedes stale TODO/status and skip-list
+Status: **U0 accepted; U1–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
-historical evidence. Writing this plan does not start experiments.
+historical evidence. U0 was accepted on September 7; later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -89,17 +89,17 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U0 — Baseline inventory and reliable experiment harness
 
-- [ ] Inventory read-only first; preserve current image and patched sources.
-- [ ] Add per-suite failure propagation, effective-version/config capture,
+- [x] Inventory read-only first; preserve current image and patched sources.
+- [x] Add per-suite failure propagation, effective-version/config capture,
   checkpoint-aware PLE identity, bounded startup/request deadlines and a non-root
   memory watchdog before long prefills. Monitor MemAvailable, MemFree, swap and
   driver allocation errors. Calibrate conservative thresholds on this host rather
   than copying vLLM's memory fraction. Stop gracefully on sustained pressure.
-- [ ] Verify failure detection/watchdog logic with synthetic inputs. Keep one
+- [x] Verify failure detection/watchdog logic with synthetic inputs. Keep one
   benchmark lock and ensure detached jobs survive tool return.
-- [ ] Measure the historical configuration only in its already-tested short
+- [x] Measure the historical configuration only in its already-tested short
   context range. Do not stress old QSA at 120k+ just to reproduce published bugs.
-- [ ] Log baseline and tooling validation; commit before U1.
+- [x] Log baseline and tooling validation; commit before U1.
 
 ### U1 — Dedicated SM121 sparse-decode correctness fix
 

@@ -1132,3 +1132,82 @@ The README now flags the known upstream QSA concern and links the plan. The
 EXPLORATION header marks its old status entries as historical. Future per-item
 entries must record accepted/rejected/deferred, evidence, rollback, and commit
 before the next item. Existing performance figures were not remeasured.
+
+
+## U0 — Baseline inventory and reliable experiment harness (2026-09-07)
+
+**Decision: accepted.** New locked harness; historical serving flags unchanged.
+Rollback is not applicable (tooling only). Next item is U1.
+
+TAGs: `u0-baseline-20260907` (aborted), `u0-baseline-retry-20260907` (pass).
+Commands (detached): `PROFILE=u0 TAG=<tag> nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Synthetic detector: `python3 tests/test_harness.py` (16 tests during the live runs;
+allocation-error sustain coverage added after the retry).
+
+### Inventory (retry, before launch)
+
+| Item | Value |
+| --- | --- |
+| Git | `f0cd56a` plus dirty harness WIP |
+| Image id | `sha256:64c58f100438fa5f036bdfbeb3edd3136fb12c5d22d8ae52786c4a701263c55d` |
+| Repo digest | `lmsysorg/sglang@sha256:12d3392bdc8be8d35e9a95f191df6aef99c5114bdbefd41bfdc7e760e6d25ec1` |
+| In-image SGLang | `0.0.0.dev1+gd91c3682b` / `d91c3682b0b429e4c70df63cd57f819588ce29b0` |
+| Packages | torch `2.13.0+cu130`, flashinfer `0.6.17`, triton `3.7.1`, transformers `5.12.1`, sglang-kernel `0.4.6.post1`, nvidia-modelopt `0.45.0` |
+| Checkpoint | `RadixArk/Qwen3.8-Flash-Next-NVFP4` @ `7b719225242aacd3dbd3f9407468c2ee9a9d2594` |
+| PLE | 128 shards, 51200245760 bytes, sample `a13a022a…`; `128/128 shards already on disk` |
+| GPU / clocks | GB10, driver 580.173.02, **208 / 3003 MHz** (host cap, unchanged) |
+| Host | kernel 6.17.0-1031-nvidia, 121 GiB, swap 0 |
+
+Effective flags match the shipped recipe (`mem_fraction_static=0.95`, context 262144,
+`max_total_num_tokens=524288`, page 64, extra_buffer, track 64, triton/trtllm_mha,
+NEXTN 3/1/4, `--enable-gdn-replayssm-spec`). Launch reports `speculative_algorithm=NEXTN`
+and draft `unquant`; `/server_info` reports `EAGLE` and draft quantization `null` — same
+as August. KV BF16, 524288 tokens.
+
+### Harness
+
+`scripts/run_config.sh` now owns inventory, image pin, sampled PLE identity, llama-swap
+unload, GPU-idle check, watchdog, bounded suites, and stop. `scripts/bench_fast.sh` is
+benchmark-only against an already-running server under the same `results/.bench.lock`.
+Tags cannot overwrite prior evidence. Suite process exit 0 is not a pass: quality/needle
+failures, missing reports, invalid tool calls, and late-recall misses fail the verdict.
+`PROFILE=u0` caps text prompts at 32768 tokens and refuses >40 turns or >32k needles.
+
+Watchdog floors: 6 GiB MemAvailable, 0.5 GiB MemFree gated at 10 GiB available, 0.5 GiB
+swap growth, 15 s sustain. First live boot (`u0-baseline-20260907`) reached uvicorn
+(519 s tokenizer_e2e) then the watchdog SIGTERM'd it: two kernel lines at 15:54:24 and
+15:54:27 IST, `NV_ERR_NO_MEMORY` from `_memdescAllocInternal`, while MemAvailable was
+still 12.6 GiB. No Xid this boot. The same signature is common on this host during graph
+capture (176 lines since boot, including the August campaign). Retry one minute later
+had **zero** new `NV_ERR` lines, min available 9.87 GiB, min free 0.88 GiB, swap 0.
+Calibration: Xids still stop immediately; allocation errors now use the 15 s sustain
+window and only *new* journal samples. Trip JSON keeps matching lines. Not a claim that
+large prefills are safe.
+
+### Short-context remeasure (retry, thinking defaults as labeled)
+
+Boot 533.5 s. Suites: smoke, quality 12/12, decode, 8k/32k longctx, 40-turn agentic off/on — all pass, 0 invalid tool calls. Server stopped cleanly (`stop_exit_code=0`).
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 39.26 (38.63–40.50) | 32.73 (29.96–33.11) |
+| prose ES | 22.17 (20.65–22.27) | 26.53 (26.35–27.49) |
+
+August shipped code/prose was ~39.3/23.4 off and ~31.5/26.7 on. Spread is the usual ±5%.
+
+| Longctx | first s | resend s | speedup | needle |
+| --- | ---: | ---: | ---: | --- |
+| 8k (5885 tok) | 4.42 | 0.55 | 7.98× | PASS |
+| 32k (23555 tok) | 10.37 | 0.44 | 23.3× | PASS |
+
+32k TTFT matches August's 10.37 s exactly. 8k is a bit slower than August's 3.98 s;
+still well within one-run noise and a different tokenize preflight. Not a 120k+ test.
+
+| 40-turn agentic | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 57 s | 39/40 | 0 | PASS | 48.1 / 50.6 / 50.9 tok/s |
+| thinking on | 111 s | 39/40 | 0 | PASS | 37.8 / 32.7 / 34.1 tok/s |
+
+This is not the 120-turn promotion gate. `spec_accept_length` was not dumped by the new
+suite. Vision positional smoke still passed. Recipe defaults stay.
+

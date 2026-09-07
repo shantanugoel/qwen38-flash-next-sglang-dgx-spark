@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 PORT="${PORT:-30000}"
 HOST="${HOST:-127.0.0.1}"
-BASE="http://${HOST}:${PORT}"
+BASE="${BASE:-http://${HOST}:${PORT}}"
 WAIT="${WAIT:-0}"
 
 if [[ "${WAIT}" != 0 ]]; then
@@ -28,7 +28,9 @@ curl -sf -m 10 "${BASE}/health" >/dev/null && echo "   OK"
 
 echo ">> 12*17"
 python3 - "${BASE}" "${SERVED_NAME}" <<'PY'
-import json, sys, urllib.request
+import json, sys, urllib.request, signal
+signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("smoke request deadline")))
+signal.alarm(300)
 base, model = sys.argv[1], sys.argv[2]
 body = {
     "model": model,
