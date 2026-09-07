@@ -13,6 +13,7 @@ SGLANG_CACHE="${SGLANG_CACHE:-$ROOT/data/sglang-cache}"
 BUILD="${BUILD:-$ROOT/build}"
 QWEN4_BACKEND="${BUILD}/qwen4_exp.py"
 QSA_BACKEND="${BUILD}/qwen_sparse_attn_backend.py"
+SPEC_UTILS_BACKEND="${BUILD}/spec_utils.py"
 SNAPSHOT="${HF_CACHE}/hub/models--${MODEL//\//--}/snapshots/${REVISION}"
 
 docker_user() {

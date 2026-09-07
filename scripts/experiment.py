@@ -54,6 +54,13 @@ def validate(name, report):
         s = report['summary']
         return (s['invalid_tool_calls'] == 0 and s['late_recall_pass'] is True
                 and s['turns'] > 0 and len(report['turns']) == s['turns'])
+    if name == 'ple_spec':
+        rows = report['results']
+        return bool(rows) and report['failed'] == 0 and all(r['pass'] is True for r in rows)
+    if name == 'gsm8k':
+        s = report['summary']
+        return (s.get('n', 0) > 0 and 'accuracy' in s
+                and len(report.get('results') or []) == s['n'])
     return False
 
 
@@ -68,6 +75,12 @@ def suites(out, env, guard=None):
         for mode in ('off', 'on'):
             tasks.append(('agentic_' + mode, [sys.executable, str(ROOT / 'bench/agentic.py')],
                           {'THINKING': mode, 'TURNS': env.get('TURNS', '40')}))
+    if env.get('PROFILE') == 'u2':
+        if env.get('SPEC', 'nextn') != 'off':
+            tasks += [('ple_spec', [sys.executable, str(ROOT / 'bench/ple_spec.py')], {})]
+        if env.get('GSM8K_N'):
+            tasks += [('gsm8k', [sys.executable, str(ROOT / 'bench/gsm8k.py')],
+                       {'N': env['GSM8K_N'], 'THINKING': env.get('GSM8K_THINKING', 'off')})]
     if only := env.get('ONLY'):
         wanted = {name.strip() for name in only.split(',') if name.strip()}
         tasks = [t for t in tasks if t[0] in wanted]
@@ -79,8 +92,10 @@ def suites(out, env, guard=None):
         row = {'name': name, 'status': 'error'}
         start = time.monotonic()
         try:
-            rc = bounded(args, out / (name + '.log'), float(env.get('SUITE_TIMEOUT', '900')),
-                         child_env, guard)
+            timeout = float(env.get('SUITE_TIMEOUT', '900'))
+            if name == 'gsm8k':
+                timeout = float(env.get('GSM8K_TIMEOUT', str(timeout)))
+            rc = bounded(args, out / (name + '.log'), timeout, child_env, guard)
             row['exit_code'] = rc
             if name == 'smoke':
                 passed = rc == 0
@@ -238,7 +253,7 @@ def run(out, env):
             if any(key in line for key in ('shards already on disk', 'KV Cache',
                 'max_total_num_tokens=', 'CUDA graph', 'Load weight end',
                 'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
-                'Triton SM121 QSA')))
+                'Triton SM121 QSA', 'committing PLE n-gram')))
         (out / 'boot-facts.txt').write_text(facts)
         if env.get('QSA_KERNEL_CHECK') == '1':
             if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
@@ -248,6 +263,27 @@ def run(out, env):
         env['MODEL'] = env['SERVED_NAME']
         rc = suites(out, env, guard)
         result['status'] = 'pass' if rc == 0 else 'fail'
+        try:
+            with urllib.request.urlopen(base + '/metrics', timeout=10) as response:
+                metrics_txt = response.read().decode('utf-8', 'replace')
+            metrics = {}
+            for line in metrics_txt.splitlines():
+                if line.startswith('#') or ' ' not in line:
+                    continue
+                key, _, val = line.rpartition(' ')
+                metric = key.split('{', 1)[0]
+                if metric in ('sglang:spec_accept_length', 'sglang:cache_hit_rate'):
+                    metrics[metric] = float(val)
+            result['metrics'] = metrics
+        except (OSError, ValueError):
+            result['metrics'] = {}
+        if env.get('PROFILE') == 'u2' and env.get('SPEC', 'nextn') != 'off':
+            served_proc = subprocess.run(['docker', 'logs', '--tail', '8000', container],
+                                         capture_output=True, text=True, timeout=20)
+            served = served_proc.stdout + served_proc.stderr
+            if 'committing PLE n-gram/short-conv state' not in served:
+                raise RuntimeError(
+                    'ReplaySSM PLE commit did not log; patch is not on the serving path')
     finally:
         if owned:
             tail = subprocess.run(['docker', 'logs', '--tail', '200', container],
@@ -297,6 +333,15 @@ def main():
             env.setdefault('SUITE_TIMEOUT', '1800')
             env.setdefault('REQUEST_TIMEOUT', '900')
             env.setdefault('QSA_KERNEL_CHECK', '1')
+        elif env.get('PROFILE') == 'u2':
+            env.setdefault('TURNS', '120')
+            env.setdefault('SIZES', '8k,32k')
+            env.setdefault('SUITE_TIMEOUT', '1800')
+            env.setdefault('REQUEST_TIMEOUT', '900')
+            env.setdefault('GSM8K_N', '200')
+            env.setdefault('GSM8K_TIMEOUT', '7200')
+            if 'NGRAM' in env.get('EXTRA_ARGS', '').upper():
+                raise SystemExit('U2 isolates the PLE commit; do not enable NGRAM')
         try:
             if sys.argv[1:] == ['run']:
                 return run(out, env)

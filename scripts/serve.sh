@@ -51,7 +51,7 @@ else
 fi
 
 docker image inspect "${IMAGE}" >/dev/null
-[[ -f "${QWEN4_BACKEND}" && -f "${QSA_BACKEND}" && -f "${BUILD}/sm121_varlen.py" ]] || {
+[[ -f "${QWEN4_BACKEND}" && -f "${QSA_BACKEND}" && -f "${SPEC_UTILS_BACKEND}" && -f "${BUILD}/sm121_varlen.py" ]] || {
   echo "patches missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
@@ -59,7 +59,7 @@ docker image inspect "${IMAGE}" >/dev/null
   echo "checkpoint missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
-[[ -f "${BUILD}/path_qwen4_exp.txt" && -f "${BUILD}/path_qsa.txt" && -f "${BUILD}/path_sm121_varlen.txt" ]] || {
+[[ -f "${BUILD}/path_qwen4_exp.txt" && -f "${BUILD}/path_qsa.txt" && -f "${BUILD}/path_sm121_varlen.txt" && -f "${BUILD}/path_spec_utils.txt" ]] || {
   echo "in-image paths missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
   exit 1
 }
@@ -67,6 +67,7 @@ docker image inspect "${IMAGE}" >/dev/null
 QWEN4_IN_IMAGE="$(cat "${BUILD}/path_qwen4_exp.txt")"
 QSA_IN_IMAGE="$(cat "${BUILD}/path_qsa.txt")"
 SM121_IN_IMAGE="$(cat "${BUILD}/path_sm121_varlen.txt")"
+SPEC_UTILS_IN_IMAGE="$(cat "${BUILD}/path_spec_utils.txt")"
 UIDGID="$(docker_user)"
 extra_gpu_groups
 mkdir -p "${PLE_DIR}" "${SGLANG_CACHE}"
@@ -95,6 +96,7 @@ docker run -d --name "${CONTAINER}" --init \
   -v "${PLE_DIR}:/ple" \
   -v "${QWEN4_BACKEND}:${QWEN4_IN_IMAGE}:ro" \
   -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro" \
+  -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro" \
   -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro" \
   "${IMAGE}" \
   sglang serve \

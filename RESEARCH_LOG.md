@@ -1291,3 +1291,87 @@ Recorded as another point on "unpredictable", not a new claim.
   `patches/qsa_sm121_kda.py`) and must not be applied by `prepare.sh`.
 - `qsa_trtllm_sm120.py` is deprecated and must not be applied on SM121.
 
+## U2 — ReplaySSM PLE-state correctness audit (2026-09-07)
+
+**Decision: accepted.** The installed image is affected by the #37794 PLE freeze.
+The isolated `spec_utils` commit is now the serving default. NGRAM from that PR
+is not ported. Next item is U3. Rollback of this patch would restore a known
+incorrect PLE history after the first speculative verify.
+
+TAG: `u2-ple-commit-20260907`.
+Command (detached): `PROFILE=u2 TAG=<tag> nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Runtime reused the existing PLE mmap and HF cache (not committed).
+Image unchanged: `sha256:64c58f100438fa5f036bdfbeb3edd3136fb12c5d22d8ae52786c4a701263c55d`.
+Source in image: `d91c3682b0` (`0.0.0.dev1+gd91c3682b`). Checkpoint and PLE identity
+unchanged from U1 (`7b719225242aacd3dbd3f9407468c2ee9a9d2594`). Clocks still
+208 / 3003 MHz. Watchdog did not trip. `stop_exit_code=0`.
+
+### Diagnosis
+
+`scripts/serve.sh` passes `--enable-gdn-replayssm-spec`, a deprecated alias of
+`--enable-linear-replayssm-spec`. On this image that sets
+`MambaPool.replayssm_spec_fold = True`. `commit_mamba_states_after_verify` then
+takes the GDN fold branch (`commit_gdn_replayssm_fold_after_verify`) and
+returned before `HybridLinearAttnBackend._update_ple_state_after_mtp_verify`.
+During TARGET_VERIFY, `qwen4_exp._commit_ple_batch` only writes
+`ngram_pool.intermediate_context`; the persistent `ngram_pool.context` is
+supposed to take the last accepted draft step after verify. Without that scatter
+the PLE history freezes at the prefill suffix for the rest of a speculative
+decode. This hits MTP top-k 1, not only NGRAM.
+
+[#37794](https://github.com/sgl-project/sglang/pull/37794) (open, `30de7bd` on
+`qwen4-main-squashed`) also drops the NGRAM guard in `qwen4_exp.py` and adds
+`ngram_worker._linearize_chain`. Those stay out: U2 isolates the PLE commit.
+`_prepare_ple_batch` still raises `Qwen4 PLE does not support NGRAM speculation`.
+The ring ReplaySSM branch is patched the same way for completeness; this recipe
+uses the fold path.
+
+### What changed
+
+`patches/replayssm_ple_commit.py` inserts the PLE roll (with
+`req_pool.translate_mamba_indices`) on both ReplaySSM early returns. `prepare.sh`
+extracts and patches `spec_utils.py`; `serve.sh` bind-mounts it. `PROFILE=u2`
+adds `bench/ple_spec.py` and GSM8K n=200 and refuses `EXTRA_ARGS` containing
+NGRAM. Unit tests cover patch anchors, NGRAM-leak refusal, and last-correct-step
+selection.
+
+### Serving (`u2-ple-commit-20260907`)
+
+Boot 573.61 s, PLE `128/128 shards already on disk`, Triton SM121 QSA, log
+`ReplaySSM verify: committing PLE n-gram/short-conv state` at first verify.
+Harness `experiment_status` is **fail** because quality and thinking-on 120-turn
+late recall failed the strict suite validator. That is not a rollback of a
+known-incorrect freeze. Evidence used for accept:
+
+| Suite | Result |
+| --- | --- |
+| smoke | pass |
+| quality | 11/12; `effort_thinking_off` answered `25` not `24` (temperature 0). All other items including `12×17=204`, tools, vision, multi-turn fact passed |
+| decode | pass |
+| longctx 8k/32k | 2/2 needles PASS; 32k 10.40 s → 0.50 s (20.7×) |
+| agentic_off 120 | pass: 119/120 tools, 0 invalid, late recall PASS, 127 s |
+| agentic_on 120 | 76/120 tools, 0 invalid; late recall was a disclosure-style refusal ("I won't print it. It's a live credential"), not a forgotten code |
+| ple_spec | 4/4: temp-0 accept-heavy, temp-1.4 reject-heavy, planted-token recall, spec_accept_length 2.925 |
+| GSM8K n=200 thinking off | **193/200 (96.5%)**, 2097 s, median 38.23 tok/s. Fails at indices 12, 85, 90, 93, 113, 119, 163. Not a paired U1 number (U1 did not run n=200); August n=20 was 19/20 |
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 38.56 (36.9–40.65) | 35.74 (32.48–37.56) |
+| prose ES | 22.92 (21.24–23.19) | 26.91 (25.26–27.56) |
+
+U1 was 40.63 / 31.91 code and 23.42 / 25.66 prose. Thinking-off code overlaps
+U1. This item is a correctness fix, not a speed claim. End-of-run
+`spec_accept_length` 3.725 after GSM8K.
+
+Thinking-on tool frequency 76/120 vs U1 119/120 is recorded as another point on
+"unpredictable", matching the U1 note. Invalid tool calls remain 0.
+
+### Limits
+
+- No paired non-speculative server this run. The plan does not require identical
+  sampled text; GSM8K and PLE-spec recall are the expanded check.
+- 120k / 190k / 210k needles still not run.
+- #37794 NGRAM / `_linearize_chain` / dropping the Qwen4 NGRAM guard: not ported.
+- `effort_thinking_off` 11/12 remains a known one-item greedy miss at temperature 0.
+- Thinking-on 120-turn late-recall harness fail is refusal, not forgotten PLE state.
+

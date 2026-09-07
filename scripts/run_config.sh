@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One background job per experiment; unique TAG, logs under results/.
-# TAG=u0 PROFILE=u0 nohup ./scripts/run_config.sh > results/run-u0.log 2>&1 &
+# TAG=u2 PROFILE=u2 nohup ./scripts/run_config.sh > results/run-u2.log 2>&1 &
 # Owns restart, watchdog, suites and graceful shutdown. Never foreground it.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

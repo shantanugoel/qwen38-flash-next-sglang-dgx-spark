@@ -1,11 +1,13 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 7 upstream campaign:** **U1 is accepted.** Sparse decode on GB10 now
+**September 7 upstream campaign:** **U0–U2 are accepted.** Sparse decode on GB10
 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
-not a widened TRT-LLM/XQA gate. The later KDA overlay from that PR passed isolated
-tensor replay here and then emitted token-id 0 on a 32k needle; it is not the
-serving default. 8k/32k needles and 120-turn sessions pass on Triton. 120k–210k
-needles are still unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
+not a widened TRT-LLM/XQA gate. ReplaySSM verify commits PLE n-gram/short-conv
+state ([#37794](https://github.com/sgl-project/sglang/pull/37794) `spec_utils` hunk
+only; that PR's NGRAM feature is not ported). The later KDA overlay from #36845
+passed isolated tensor replay here and then emitted token-id 0 on a 32k needle;
+it is not the serving default. 8k/32k needles pass. 120k–210k needles are still
+unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
@@ -31,7 +33,7 @@ Prefill uses the real QSA kernels (llama.cpp GGUF cannot). We did **not** benchm
 # optional: point at an existing Hub cache
 # export HF_CACHE=$HOME/.cache/huggingface
 
-./scripts/prepare.sh          # pull image, patch two files, download weights
+./scripts/prepare.sh          # pull image, patch qwen4_exp / QSA / spec_utils, download weights
 ./scripts/serve.sh            # :30000, ~10 min first load, ~10 min after
 ./scripts/smoke.sh            # health + "12*17" → 204
 ```
@@ -188,9 +190,50 @@ Terminal-Bench number in this repo was measured on a Spark.
 
 Single stream, `RadixArk/Qwen3.8-Flash-Next-NVFP4`, MTP 3/1/4, `trtllm_mha`
 dense decode, QSA sparse decode via #36845 Triton, `triton` prefill, CUDA graphs,
-radix cache on, **vision on**, 262k context, clock-capped GB10. U1 Triton numbers
-are 2026-09-07 (`u1-triton-20260907`). August 28 tables below the U1 block are
-the historical widened-gate recipe and are not the current default.
+radix cache on, **vision on**, 262k context, clock-capped GB10. U2 numbers
+(`u2-ple-commit-20260907`) are the current default. U1 Triton (`u1-triton-20260907`)
+is the previous QSA-corrected baseline. August 28 tables below those blocks are
+the historical widened-gate recipe.
+
+### U2 current default (2026-09-07, PLE commit after ReplaySSM verify)
+
+`--enable-gdn-replayssm-spec` is a deprecated alias of
+`--enable-linear-replayssm-spec`. On this image that sets `replayssm_spec_fold`,
+so `commit_mamba_states_after_verify` used to return before rolling PLE n-gram
+and short-conv state. `patches/replayssm_ple_commit.py` applies the #37794
+`spec_utils` hunk to both ReplaySSM early-return branches. NGRAM stays refused.
+
+Boot 574 s, PLE `128/128 shards already on disk`, Triton SM121 QSA, log line
+`ReplaySSM verify: committing PLE n-gram/short-conv state`. Dedicated
+accept/reject + recall suite 4/4. GSM8K n=200 thinking-off **193/200 (96.5%)**.
+Vision, tools, executed code, 8k/32k needles all pass. 0 invalid tool calls.
+
+Harness `experiment_status` is fail: quality 11/12 (`effort_thinking_off` answered
+`25` not `24` at temperature 0) and thinking-on 120-turn late recall was a
+disclosure-style refusal, not a forgotten code. Expanded GSM8K and the dedicated
+PLE recall are the gates that matter for this bug; rolling the patch back would
+restore the freeze. Thinking-on tool frequency this run was 76/120 (U1 was
+119/120; already recorded as unpredictable).
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 38.56 (36.9–40.65) | 35.74 (32.48–37.56) |
+| prose ES | 22.92 (21.24–23.19) | 26.91 (25.26–27.56) |
+
+U1 was 40.63 / 31.91 code and 23.42 / 25.66 prose. Thinking-off code overlaps
+U1's range; this is a correctness change, not a speed claim.
+
+| Longctx | first s | resend s | speedup | needle |
+| --- | ---: | ---: | ---: | --- |
+| 8k (5885 tok) | 3.66 | 0.57 | 6.4× | PASS |
+| 32k (23555 tok) | 10.40 | 0.50 | 20.7× | PASS |
+
+| 120-turn | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 127 s | 119/120 | 0 | PASS | 57.4 / 57.5 / 57.4 tok/s |
+| thinking on | 677 s | 76/120 | 0 | refusal | 31.6 / 29.7 / 25.6 tok/s |
+
+**Not a 120k+ test.** End-of-run `spec_accept_length` 3.725 after GSM8K.
 
 ### U1 corrected baseline (2026-09-07, Triton SM121)
 
@@ -213,29 +256,30 @@ overlay on this same image failed that 32k needle with 64× token id 0.
 
 120 turns, one tool call per turn, growing context, `bench/agentic.py`.
 
-Measured on the shipped config (this exact `serve.sh`), thinking **off**:
+Measured on the U2 shipped config (`u2-ple-commit-20260907`), thinking **off**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.54 s | 50.6 tok/s | 96.1% | 2.7k |
-| 41–80 | 0.56 s | 50.2 tok/s | 98.5% | 7.5k |
-| 81–120 | 0.56 s | 49.8 tok/s | **99.2%** | 12.2k |
+| 1–40 | 0.56 s | 57.4 tok/s | 95.6% | 2.5k |
+| 41–80 | 0.56 s | 57.5 tok/s | 98.4% | 6.7k |
+| 81–120 | 0.57 s | 57.4 tok/s | **99.0%** | 10.9k |
 
 119/120 turns emitted a tool call, **0 invalid tool calls**, a fact planted at
-turn 3 was recalled correctly at turn 120, 161 s wall clock, final context 14560
+turn 3 was recalled correctly at turn 120, 127 s wall clock, final context 12985
 tokens. **TTFT is flat as context grows** — that is the radix cache absorbing the
-resend pattern.
+resend pattern. Decode here is tool-JSON-heavy and is not the code/prose table.
 
 Same session, thinking **on**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.38 s | 34.5 tok/s | 94.1% | 2.8k |
-| 41–80 | 0.43 s | 29.7 tok/s | 96.4% | 7.6k |
-| 81–120 | 0.47 s | 28.1 tok/s | **97.8%** | 13.2k |
+| 1–40 | 0.39 s | 31.6 tok/s | 94.7% | 2.8k |
+| 41–80 | 0.38 s | 29.7 tok/s | 98.0% | 7.9k |
+| 81–120 | 0.33 s | 25.6 tok/s | **99.3%** | 13.7k |
 
-0 invalid tool calls, 593 s wall clock. Reasoning costs roughly 40% of decode
-rate at this horizon.
+0 invalid tool calls, 677 s wall clock. Tool frequency 76/120 this run (U1 was
+119/120). Late recall was a disclosure-style refusal of the planted code, not a
+forgotten value; the dedicated PLE-spec recall test passed.
 
 Repeated 40-turn runs land at 48–52 tok/s decode, 0.56–0.60 s TTFT and
 97.3–97.5% cache hit, with **0 invalid tool calls** every time.
@@ -269,13 +313,18 @@ would suggest.
 
 | | |
 | --- | ---: |
-| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **12/12** |
-| MTP `spec_accept_length` | **3.93–3.95 / 4.0** |
-| GSM8K, n=20, thinking off | **19/20 (95%)** |
+| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **11/12** (U2) / 12/12 (U1) |
+| MTP `spec_accept_length` | **3.73** end-of-U2 mixed load (was 3.93–3.95) |
+| GSM8K, n=200 first official test, thinking off | **193/200 (96.5%)** |
+| GSM8K, n=20, thinking off (August) | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
 | — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
 | — irrelevance / live_irrelevance | 80.0% / **30.0%** |
 | invalid tool calls, ~600 tool turns total | **0** |
+
+U2 quality 11/12 is `effort_thinking_off` answering `25` instead of `24` at
+temperature 0. Math `12×17`, tools, vision and multi-turn fact passed. GSM8K
+n=200 is the expanded gate for that miss.
 
 `live_irrelevance` at 30% is the one weak spot: the model reaches for a tool when
 the right move is to decline. Curated `irrelevance` is 80%, so it is the harder
@@ -302,6 +351,7 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | `--language-only` (vision off) | **Does not disable vision.** It is for encoder *disaggregation*; with no encoder service configured the local tower still runs and still answers image questions correctly. 89 MiB and 0 KV difference — there was never a headroom argument |
 | Widened TRT-LLM QSA gate (`is_sm120_supported()`) | **Rejected.** On SM121 that call is XQA, not trtllm-gen. Silent token-id-0 loops from ~120k. Retired by #36806/#36845 |
 | #36845 KDA SM121 overlay on this image | **Rejected for serving.** Isolated rel-L2 ≤ 0.0024 and CUDA-graph replay passed; a 32k needle then returned 64× `!`. Triton-only on the same stack passed |
+| #37794 NGRAM on Qwen4-Exp | **Not ported.** U2 took only the ReplaySSM PLE-commit hunk. `_prepare_ple_batch` still refuses NGRAM |
 
 ### Vision
 

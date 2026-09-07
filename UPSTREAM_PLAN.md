@@ -1,9 +1,11 @@
 # Upstream validation plan — September 2026
 
-Status: **U0 and U1 accepted; U2–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0, U1 and U2 accepted; U3–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
-default; KDA overlay rejected on this image). Later items remain unexecuted.
+default; KDA overlay rejected on this image). U2 was accepted the same day:
+ReplaySSM verify now commits PLE n-gram/short-conv state (#37794 `spec_utils`
+hunk only; NGRAM not ported). Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -118,14 +120,17 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U2 — ReplaySSM PLE-state correctness audit
 
-- [ ] Trace our exact flag/alias and code branches against open
+- [x] Trace our exact flag/alias and code branches against open
   [#37794](https://github.com/sgl-project/sglang/pull/37794). This is a reported
   bug, not a confirmed diagnosis of our installed version.
-- [ ] If affected, isolate PLE history/short-convolution state commits after verify;
+  Affected: `--enable-gdn-replayssm-spec` aliases `--enable-linear-replayssm-spec`,
+  `replayssm_spec_fold=True`, GDN fold returns before the PLE roll.
+- [x] If affected, isolate PLE history/short-convolution state commits after verify;
   do not introduce the PR's NGRAM feature. Test accepted/rejected draft state
   transitions, then fast, expanded-quality and promotion gates. Compare against
   non-speculative behavior without requiring identical sampled text.
-- [ ] If unaffected, record exact code evidence. Commit outcome before U3.
+  Isolated `spec_utils` patch accepted; NGRAM left refused. See RESEARCH_LOG U2.
+- [x] Document results, limits and defaults; commit before U3.
 
 ### U3 — Pinned newer SGLang model-development image
 

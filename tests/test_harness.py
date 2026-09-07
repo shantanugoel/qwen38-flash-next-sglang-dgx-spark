@@ -303,5 +303,85 @@ class QsaPatchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 suites(out, {'ONLY': 'no-such-suite'})
 
+    def test_u2_profile_adds_ple_spec_and_gsm8k(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            def fake_bounded(args, log, seconds, env=None, guard=None):
+                name = Path(env['OUT']).stem
+                if name == 'smoke':
+                    return 0
+                payload = {'results': [{'pass': True, 'needle_pass': True}], 'failed': 0}
+                if name == 'decode':
+                    payload = {'results': [
+                        {'mode': 'thinking_on', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                        {'mode': 'thinking_off', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                    ]}
+                elif name == 'gsm8k':
+                    payload = {'summary': {'n': 2, 'accuracy': 50.0},
+                               'results': [{'i': 0, 'pass': True}, {'i': 1, 'pass': False}]}
+                Path(env['OUT']).write_text(json.dumps(payload))
+                return 0
+            with patch('experiment.bounded', side_effect=fake_bounded):
+                self.assertEqual(suites(out, {
+                    'PROFILE': 'u2', 'GSM8K_N': '200', 'QUICK': '1', 'SUITE_TIMEOUT': '1',
+                }), 0)
+            names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
+            self.assertEqual(names, ['smoke', 'quality', 'decode', 'ple_spec', 'gsm8k'])
+
+
+class ReplaySsmPleCommitTests(unittest.TestCase):
+    def load_patcher(self):
+        spec = importlib.util.spec_from_file_location(
+            'replayssm_ple_commit', ROOT / 'patches/replayssm_ple_commit.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_patch_commits_ple_on_fold_and_ring_returns(self):
+        mod = self.load_patcher()
+        src = (
+            'import logging\nlogger = logging.getLogger(__name__)\n'
+            + mod.FOLD_ANCHOR + '\n# other branch\n' + mod.RING_ANCHOR
+        )
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'spec_utils.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            patched = path.read_text()
+            self.assertEqual(patched.count('attn_backend._update_ple_state_after_mtp_verify('), 2)
+            self.assertIn('ReplaySSM verify: committing PLE n-gram/short-conv state', patched)
+            fold_idx = patched.index('commit_gdn_replayssm_fold_after_verify(')
+            fold_return = patched.index('\n        return\n', fold_idx)
+            self.assertIn('_update_ple_state_after_mtp_verify', patched[fold_idx:fold_return])
+            self.assertNotIn('_linearize_chain', patched)
+            self.assertEqual(mod.main(str(path)), 0)
+
+    def test_patch_refuses_ngram_leak_and_missing_anchor(self):
+        mod = self.load_patcher()
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / 'ngram.py'
+            bad.write_text(mod.FOLD_ANCHOR + mod.RING_ANCHOR + '\nNgramCorpus = 1\n')
+            self.assertEqual(mod.main(str(bad)), 1)
+            missing = Path(d) / 'missing.py'
+            missing.write_text('return\n')
+            self.assertEqual(mod.main(str(missing)), 1)
+
+    def test_accept_and_reject_select_last_correct_ple_history(self):
+        prompt = [1, 2, 3]
+        # per-draft intermediate histories written during TARGET_VERIFY
+        steps = [
+            [1, 2, 10],
+            [2, 10, 11],
+            [10, 11, 12],
+            [11, 12, 13],
+        ]
+
+        def commit(last_correct_step):
+            return steps[last_correct_step]
+
+        self.assertEqual(commit(3), [11, 12, 13])  # all drafts accepted
+        self.assertEqual(commit(0), [1, 2, 10])    # all drafts rejected, bonus only
+        self.assertEqual(prompt, [1, 2, 3])        # freeze bug leaves prompt n-grams
+
 
 if __name__ == '__main__': unittest.main()
