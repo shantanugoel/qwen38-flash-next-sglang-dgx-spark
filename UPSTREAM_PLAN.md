@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a accepted; U4b–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a accepted; U4b rejected; U4c–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -10,6 +10,8 @@ hunk only; NGRAM not ported). U3 was accepted on September 8: pin SGLang
 native PLE file backend, U1 Triton overlay over bundled KDA, U2 PLE commit kept.
 U4a was accepted the same day: second native-file reuse boot (`128/128`, 0 copied,
 618 s); `ple_reuse.py` stays because the native loader still rewrites the table.
+U4b (prefill `posix_fadvise(WILLNEED)`) was rejected the same day: 32k prefill
+unchanged vs prefetch-off; recipe default stays `SGLANG_QWEN4_PLE_FILE_PREFETCH=0`.
 Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
@@ -167,8 +169,11 @@ against this endpoint; never report a TB score measured on this Spark.
   and sampled identity unchanged; no writes under `~/ai`. Soak skipped via
   `ONLY=`. Fast gate: smoke/decode/longctx pass; quality 11/12 is the known
   `effort_thinking_off` miss (`28` not `24`). Accepted. See RESEARCH_LOG U4a.
-- [ ] U4b: enable prefill page prefetch alone; measure cold/warm prefill, I/O,
-  synchronization cost and decode under prefill. Log decision and commit.
+- [x] U4b: prefetch-on TAG `u4b-prefetch-20260908` vs matched off
+  `u4b-prefill-off-20260908`. WILLNEED logged only when on. 32k cold TTFT
+  10.24 s vs 10.23 s. 8k first-send 3.15 s vs 3.46 s (n=1, not a median).
+  PLE-warm and prefix-warm identical. Decode overlaps. Default stays 0.
+  Rejected. See RESEARCH_LOG U4b.
 - [ ] U4c: evaluate the RSS trimmer separately with a one-hour growing-context
   soak; measure available memory, mapping RSS, stalls and data correctness.
   Retain only a demonstrated stability/memory benefit without material latency

@@ -67,6 +67,11 @@ def validate(name, report):
         s = report['summary']
         return (s.get('n', 0) > 0 and 'accuracy' in s
                 and len(report.get('results') or []) == s['n'])
+    if name == 'prefill':
+        rows = report['results']
+        return (bool(rows) and report['failed'] == 0
+                and all(r.get('ttft_s', 0) > 0 and r.get('prompt_tokens', 0) > 0
+                        and r.get('needle_pass') is True for r in rows))
     if name == 'soak':
         s = report['summary']
         target = float(s.get('target_seconds') or 0)
@@ -80,6 +85,10 @@ def suites(out, env, guard=None):
     summary = {'status': 'running', 'suites': []}
     path = out / 'suite_status.json'
     tasks = [('smoke', ['bash', str(ROOT / 'scripts/smoke.sh')], {})]
+    if env.get('PREFILL_BENCH') == '1':
+        tasks += [('prefill', [sys.executable, str(ROOT / 'bench/prefill.py')],
+                   {'SIZES': env.get('SIZES', '8k,32k'),
+                    'N': env.get('PREFILL_N', env.get('N', '3'))})]
     tasks += [('quality', [sys.executable, str(ROOT / 'bench/quality.py')], {'EFFORT': '1'}),
               ('decode', [sys.executable, str(ROOT / 'bench/decode.py')], {'THINKING': 'both', 'N': env.get('N', '3')})]
     if env.get('QUICK') != '1':
@@ -272,13 +281,17 @@ def run(out, env):
                 'max_total_num_tokens=', 'CUDA graph', 'Load weight end',
                 'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
                 'Triton SM121 QSA', 'committing PLE n-gram',
-                'file-backed mmap', 'reusing recipe backing file')))
+                'file-backed mmap', 'reusing recipe backing file',
+                'WILLNEED prefetch', 'RSS trimmer')))
         (out / 'boot-facts.txt').write_text(facts)
         if env.get('QSA_KERNEL_CHECK') == '1':
             if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
                 raise RuntimeError('KDA SM121 kernel selected; Triton-only serving is required')
             if 'Triton SM121 QSA' not in facts:
                 raise RuntimeError('Triton SM121 QSA route did not log at boot')
+        prefetch = str(env.get('SGLANG_QWEN4_PLE_FILE_PREFETCH', '0')).strip().lower()
+        if prefetch not in ('0', '', 'false', 'no') and 'WILLNEED prefetch' not in facts:
+            raise RuntimeError('PLE file prefetch did not log at boot')
         env['MODEL'] = env['SERVED_NAME']
         rc = suites(out, env, guard)
         result['status'] = 'pass' if rc == 0 else 'fail'

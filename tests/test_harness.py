@@ -336,6 +336,29 @@ class QsaPatchTests(unittest.TestCase):
             names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
             self.assertEqual(names, ['smoke', 'quality', 'decode', 'soak'])
 
+    def test_prefill_bench_inserts_after_smoke(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            def fake_bounded(args, log, seconds, env=None, guard=None):
+                name = Path(env['OUT']).stem
+                if name == 'smoke':
+                    return 0
+                payload = {'results': [{'pass': True, 'needle_pass': True,
+                                        'ttft_s': 1.0, 'prompt_tokens': 8}], 'failed': 0}
+                if name == 'decode':
+                    payload = {'results': [
+                        {'mode': 'thinking_on', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                        {'mode': 'thinking_off', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                    ]}
+                Path(env['OUT']).write_text(json.dumps(payload))
+                return 0
+            with patch('experiment.bounded', side_effect=fake_bounded):
+                self.assertEqual(suites(out, {
+                    'QUICK': '1', 'SUITE_TIMEOUT': '1', 'PREFILL_BENCH': '1',
+                }), 0)
+            names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
+            self.assertEqual(names, ['smoke', 'prefill', 'quality', 'decode'])
+
     def test_only_runs_named_suites(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)

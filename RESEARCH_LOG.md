@@ -1537,3 +1537,63 @@ boot/maintenance confirmation, not a speed claim. End-of-run `spec_accept_length
 - Native #37068 still has no skip path of its own. `ple_reuse.py` remains a
   recipe overlay on `copy_ple_rows_to_tp_embedding`.
 
+## U4b — Prefill PLE page prefetch (2026-09-08)
+
+**Decision: rejected.** Keep `SGLANG_QWEN4_PLE_FILE_PREFETCH=0`. Native #37068
+defaults this env to true; the recipe must keep forcing it off. 32k cold prefill
+is already ~2.3k tok/s on this NVMe without WILLNEED, so the documented GB10 win
+(650–750 → 1,000–2,100 tok/s) does not apply here. Rollback is the current
+default (no restore boot).
+
+TAGs: `u4b-prefetch-20260908` (on) and `u4b-prefill-off-20260908` (matched off).
+Command (detached): `PROFILE=u3 TAG=<tag> SGLANG_QWEN4_PLE_FILE_PREFETCH={1|0} SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0 PREFILL_BENCH=1 ONLY=smoke,prefill,quality,decode,longctx PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Image, digest, packages, checkpoint and PLE identity unchanged from U4a. Clocks
+still 208 / 3003 MHz. Watchdog did not trip. `stop_exit_code=0`.
+
+On-run boot 564.68 s; off-run 566.24 s. Both `128/128` / 0 copied. On-run log:
+`WILLNEED prefetch on for gathers of >= 2048 rows (row = 160 B)`. Off-run boot
+facts have no WILLNEED line. RSS trimmer stayed off.
+
+### Prefill (streamed TTFT, unique salts, n=3 then resend)
+
+| | prefetch on | prefetch off |
+| --- | ---: | ---: |
+| 8k cold TTFT / tok/s | 3.15 s / 1881 | 3.46 s / 1714 |
+| 8k PLE-warm median TTFT | 2.71 s | 2.73 s |
+| 8k prefix-warm TTFT | 0.295 s | 0.305 s |
+| 32k cold TTFT / tok/s | 10.24 s / 2317 | 10.23 s / 2319 |
+| 32k PLE-warm median TTFT | 10.43 s | 10.21 s |
+| 32k prefix-warm TTFT | 0.346 s | 0.338 s |
+| 8k scheduler `read_bytes` | 11.8 MiB | 3.5 MiB |
+| 32k scheduler `read_bytes` | 2.6 MiB | 2.3 MiB |
+
+Needles 8/8 both runs. 8k first-send is ~9% faster with prefetch (n=1, not a
+median of cold repeats). Later 8k and all 32k overlap. Extra 8k `read_bytes` is
+the WILLNEED cost. The `.cpu()` sync before `posix_fadvise` is inside those TTFTs.
+
+Longctx (non-stream `chat()`, after the prefill suite so PLE is warm):
+
+| | on first→resend | off first→resend | U4a (no prefill suite) |
+| --- | ---: | ---: | ---: |
+| 8k | 2.90 → 0.56 s | 2.94 → 0.57 s | 4.36 → 0.58 s |
+| 32k | 10.46 → 0.49 s | 10.44 → 0.49 s | 10.52 → 0.50 s |
+
+U4a 8k is not a matched cold: it ran after decode only.
+
+### Decode median tok/s
+
+| | on off/on | off off/on | U4a off/on |
+| --- | ---: | ---: | ---: |
+| code EN | 39.06 / 29.67 | 39.87 / 30.92 | 40.29 / 31.96 |
+| prose ES | 21.87 / 24.63 | 21.18 / 25.52 | 20.73 / 24.24 |
+
+Ranges overlap. Not a decode regression claim and not a 5% prefill win at 32k.
+On-run quality 12/12; off-run 11/12 (`effort_thinking_off` `28` not `24`). Same
+known greedy miss as U3/U4a, not a prefetch effect.
+
+### Limits
+
+- One cold 8k sample per boot; cannot drop_caches without sudo.
+- 120-turn / GSM8K / 120k+ needles not re-run; this is a prefill-I/O item.
+- Native prefetch remains available via env; recipe default stays 0.
+
