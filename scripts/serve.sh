@@ -31,13 +31,23 @@ SPEC_STEPS="${SPEC_STEPS:-3}"
 SPEC_TOPK="${SPEC_TOPK:-1}"
 SPEC_DRAFT="${SPEC_DRAFT:-4}"
 CUDA_GRAPH_MAX_BS="${CUDA_GRAPH_MAX_BS:-}"
+CUDA_GRAPH_BS="${CUDA_GRAPH_BS:-}"
 MAMBA_STRATEGY="${MAMBA_STRATEGY:-extra_buffer}"
 PAGE_SIZE="${PAGE_SIZE:-64}"
 # Extra raw sglang flags, word-split on purpose: EXTRA_ARGS="--strip-thinking-cache"
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
 
 opt=()
+if [[ -n "${CUDA_GRAPH_MAX_BS}" && -n "${CUDA_GRAPH_BS}" ]]; then
+  echo "set CUDA_GRAPH_MAX_BS or CUDA_GRAPH_BS, not both" >&2
+  exit 1
+fi
 [[ -n "${CUDA_GRAPH_MAX_BS}" ]] && opt+=(--cuda-graph-max-bs-decode "${CUDA_GRAPH_MAX_BS}")
+if [[ -n "${CUDA_GRAPH_BS}" ]]; then
+  read -r -a graph_bs <<< "${CUDA_GRAPH_BS//,/ }"
+  [[ ${#graph_bs[@]} -gt 0 ]] || { echo "CUDA_GRAPH_BS is empty" >&2; exit 1; }
+  opt+=(--cuda-graph-bs-decode "${graph_bs[@]}")
+fi
 if [[ "${SPEC:-nextn}" == "off" ]]; then
   SPEC_ARGS=()
 else

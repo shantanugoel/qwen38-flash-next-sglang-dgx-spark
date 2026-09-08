@@ -131,7 +131,8 @@ must default to `file`; native pinned RAM OOMs.
 | `CONTEXT` | `262144` | Native rope limit |
 | `MAX_TOTAL` | `524288` | KV token budget |
 | `SPEC_STEPS` / `SPEC_TOPK` / `SPEC_DRAFT` | `3` / `1` / `4` | MTP depth; `SPEC=off` disables |
-| `CUDA_GRAPH_MAX_BS` | unset | Stock captures decode graphs up to bs 256 |
+| `CUDA_GRAPH_MAX_BS` | unset | Cap decode graph captures. With `MAX_RUNNING=4`, stock already captures `bs=[1,2,3,4]` (pool size), not 256 |
+| `CUDA_GRAPH_BS` | unset | Explicit `--cuda-graph-bs-decode` list (`1,2,3,4` or `1 2 3 4`). Mutually exclusive with `CUDA_GRAPH_MAX_BS` |
 | `MAMBA_STRATEGY` | `extra_buffer` | Required for `page_size > 1`; guards MTP rewind vs GDN state |
 | `PAGE_SIZE` | `64` | Ignored — compressed QSA pins it to 64 |
 | `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
@@ -172,6 +173,8 @@ OpenAI-compatible API.
 | | |
 | --- | --- |
 | `bench/decode.py` | code + prose decode rate, thinking on and off |
+| `bench/streams.py` | concurrent 1/2/4-stream decode (`STREAMS=1`) |
+| `bench/mixedload.py` | 64k prefill arriving during two decodes; chunk-gap p50/p95/p99 (`MIXEDLOAD=1`) |
 | `bench/quality.py` | math, tool call, executed code, multi-turn fact, positional vision, effort sweep |
 | `bench/longctx.py` | 8k/32k needle and prefix-cache resend TTFT |
 | `bench/agentic.py` | long-horizon tool-calling session; TTFT / decode / cache-hit banded by turn |

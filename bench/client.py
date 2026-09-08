@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Tiny OpenAI-compat helper used by decode/quality/longctx benches."""
+"""Tiny OpenAI-compat helper used by decode/quality/longctx/streams/mixedload benches."""
 from __future__ import annotations
 
 import json
 import signal
+import threading
 from contextlib import contextmanager
 from functools import wraps
 import os
@@ -35,6 +36,9 @@ def bounded_request(fn):
         if seconds <= 0:
             raise ValueError("REQUEST_TIMEOUT must be positive")
         kwargs["timeout"] = seconds
+        # SIGALRM is process-global and only fires on the main thread.
+        if threading.current_thread() is not threading.main_thread():
+            return fn(*args, **kwargs)
         with deadline(seconds):
             return fn(*args, **kwargs)
     return wrapped
@@ -151,12 +155,15 @@ def chat_stream(
     tools=None,
     extra=None,
     timeout: int = 1800,
+    on_delta=None,
 ):
     """Streaming chat. Returns the same shape as chat() plus TTFT and rates.
 
     ttft_s      time to the first streamed token (prefill + first decode step)
     prefill_tps prompt_tokens / ttft_s   (upper bound on prefill rate)
     decode_tps  completion_tokens / (total - ttft)
+    chunks      per-SSE deltas with timestamps (seconds from request start)
+    on_delta    optional callback(chunk_record) after each content/think/tool delta
     """
     body = {
         "model": model(),
@@ -186,6 +193,7 @@ def chat_stream(
     )
     content, reasoning = [], []
     tool_calls: list = []
+    chunks: list = []
     finish = None
     usage: dict = {}
     ttft = None
@@ -214,6 +222,16 @@ def chat_stream(
                         tool_calls.extend(tcs)
                     # A pure tool call streams no content, so time the first
                     # delta of any kind or TTFT collapses onto the total.
+                    if piece or think or tcs:
+                        rec = {
+                            "t": round(time.perf_counter() - t0, 6),
+                            "content_chars": len(piece),
+                            "think_chars": len(think),
+                            "tool": bool(tcs),
+                        }
+                        chunks.append(rec)
+                        if on_delta is not None:
+                            on_delta(rec)
                     if (piece or think or tcs) and ttft is None:
                         ttft = time.perf_counter() - t0
                     content.append(piece)
@@ -246,6 +264,7 @@ def chat_stream(
         or 0,
         "prefill_tps": round(pt / ttft, 1) if ttft else 0.0,
         "decode_tps": round((ct - 1) / dec_window, 2) if ct > 1 else 0.0,
+        "chunks": chunks,
         "usage": usage,
     }
 

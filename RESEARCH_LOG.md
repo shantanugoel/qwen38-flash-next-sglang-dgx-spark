@@ -1808,4 +1808,28 @@ measured.
 
 Rollback: `SPECULATIVE_TOKEN_MAP=off`. Next item: U7.
 
+## U7a audit — CUDA graph coverage (2026-09-08)
+
+**Decision pending measurement.** Image `4ccff141` / U6 occupant already captures
+only reachable MTP batch sizes. U6 `boot-facts.txt`:
+
+- `max_running_requests=4`, `cuda_graph_max_bs_decode=None` (stock decode `bs`
+  list still goes to 256 in `CudaGraphConfig`).
+- `get_batch_sizes_to_capture` clamps to `req_to_token_pool.size` (= 4).
+- Target verify: `num_tokens_per_req=4`, `bs=[1, 2, 3, 4]`, 6.52 s, 0.78 GiB.
+- Draft decode: `num_tokens_per_req=1`, `bs=[1, 2, 3, 4]`, 4.35 s, 0.57 GiB.
+- Draft extend: `num_tokens_per_req=4`, `bs=[1, 2, 3, 4]`, 0.67 s, 0.24 GiB.
+- Prefill CUDA graphs disabled (`--disable-prefill-cuda-graph`). Padding on.
+
+There is no excess capture to trim without losing 2- or 3-stream coverage or
+disabling padding (U7a forbids both). `CUDA_GRAPH_MAX_BS=4` would be a no-op vs
+the pool-size clamp. `CUDA_GRAPH_BS` is wired for later explicit lists; default
+stays unset so raising `MAX_RUNNING` still captures the new reachable sizes.
+
+Harness for the remaining U7a/U7b measurements: `bench/streams.py` (1/2/4-stream
+aggregate tok/s) and `bench/mixedload.py` (64k prefill during two decodes; report
+chunk-gap percentiles and tokens/chunk). Opt-in via `STREAMS=1` / `MIXEDLOAD=1`.
+Primary U7a metric after the next boot: median aggregate tok/s at c=1/2/4 vs
+single-stream decode, plus boot seconds and capture lines.
+
 

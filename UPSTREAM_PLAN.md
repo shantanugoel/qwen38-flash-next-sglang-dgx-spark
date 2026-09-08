@@ -212,6 +212,10 @@ against this endpoint; never report a TB score measured on this Spark.
 - [ ] U7a: audit actual reachable draft/verify sizes and graph replay. Trim excess
   captures without disabling padding or losing coverage. Measure boot/memory
   and 1/2/4-stream performance. Log decision and commit.
+  **Audit (2026-09-08, U6 boot-facts):** MTP already captures verify/draft-decode/draft-extend
+  at `bs=[1,2,3,4]` because `max_running_requests=4` clamps `get_batch_sizes_to_capture`.
+  Prefill graphs stay disabled. Padding stays on. Harness: `STREAMS=1` / `MIXEDLOAD=1`.
+  Measurement of 1/2/4-stream performance is the remaining U7a item; do not trim 2/3.
 - [ ] U7b: hold graphs fixed; compare prefill 4096 to 2048/1024, optionally 8192,
   one candidate and commit at a time. Measure cold TTFT, aggregate throughput,
   and p50/p95/p99 streamed-chunk gaps when a 64k prefill arrives during two

@@ -72,6 +72,20 @@ def validate(name, report):
         return (bool(rows) and report['failed'] == 0
                 and all(r.get('ttft_s', 0) > 0 and r.get('prompt_tokens', 0) > 0
                         and r.get('needle_pass') is True for r in rows))
+    if name == 'streams':
+        rows = report['results']
+        wanted = {1, 2, 4}
+        got = {r.get('concurrency') for r in rows}
+        return (bool(rows) and report['failed'] == 0 and wanted.issubset(got)
+                and all(r.get('ok') is True and r.get('median_aggregate_tok_s', 0) > 0
+                        for r in rows))
+    if name == 'mixedload':
+        rows = report['results']
+        return (bool(rows) and report['failed'] == 0
+                and all(r.get('ok') is True and r.get('prefill_ttft_s', 0) > 0
+                        and r.get('prefill_prompt_tokens', 0) > 0
+                        and r.get('prefill_needle_pass') is True
+                        and r.get('decode_streams', 0) >= 2 for r in rows))
     if name in ('soak', 'growsoak'):
         s = report['summary']
         target = float(s.get('target_seconds') or 0)
@@ -92,6 +106,15 @@ def suites(out, env, guard=None):
                     'N': env.get('PREFILL_N', env.get('N', '3'))})]
     tasks += [('quality', [sys.executable, str(ROOT / 'bench/quality.py')], {'EFFORT': '1'}),
               ('decode', [sys.executable, str(ROOT / 'bench/decode.py')], {'THINKING': 'both', 'N': env.get('N', '3')})]
+    if env.get('STREAMS') == '1':
+        tasks += [('streams', [sys.executable, str(ROOT / 'bench/streams.py')],
+                   {'N': env.get('STREAMS_N', env.get('N', '3')),
+                    'CONCURRENCIES': env.get('CONCURRENCIES', '1,2,4')})]
+    if env.get('MIXEDLOAD') == '1':
+        tasks += [('mixedload', [sys.executable, str(ROOT / 'bench/mixedload.py')],
+                   {'N': env.get('MIXEDLOAD_N', env.get('N', '3')),
+                    'MIXEDLOAD_TOKENS': env.get('MIXEDLOAD_TOKENS', '64000'),
+                    'REQUEST_TIMEOUT': env.get('MIXEDLOAD_REQUEST_TIMEOUT', '1800')})]
     if env.get('QUICK') != '1':
         tasks += [('longctx', [sys.executable, str(ROOT / 'bench/longctx.py')], {'SIZES': env.get('SIZES', '8k,32k')})]
         for mode in ('off', 'on'):
@@ -125,6 +148,8 @@ def suites(out, env, guard=None):
                 timeout = float(env.get('GSM8K_TIMEOUT', str(timeout)))
             if name in ('soak', 'growsoak'):
                 timeout = float(env.get('SOAK_SECONDS', '3600')) + 300
+            if name == 'mixedload':
+                timeout = float(env.get('MIXEDLOAD_TIMEOUT', str(max(timeout, 1800))))
             rc = bounded(args, out / (name + '.log'), timeout, child_env, guard)
             row['exit_code'] = rc
             if name == 'smoke':
@@ -166,11 +191,40 @@ SAFE_FLAGS = {'model_path', 'revision', 'served_model_name', 'context_length',
               'speculative_token_map',
               'prefill_attention_backend', 'decode_attention_backend', 'enable_gdn_replayssm_spec',
               'disable_radix_cache', 'disable_prefill_cuda_graph', 'cuda_graph_max_bs_decode',
+              'cuda_graph_bs_decode',
               'reasoning_parser', 'tool_call_parser', 'preferred_sampling_params',
               'fp4_gemm_backend', 'moe_runner_backend', 'kv_cache_dtype',
               'enable_linear_replayssm_spec', 'enable_gdn_replayssm_spec',
               'enable_linear_replayssm', 'enable_gdn_replayssm', 'max_total_num_tokens',
               'ple_offload_embedding', 'ple_offload_backend', 'ple_offload_dir'}
+
+
+LIST_FLAGS = {'cuda_graph_bs_decode'}
+
+
+def launch_flags_from_argv(argv):
+    """Parse SAFE_FLAGS from a docker Cmd list. List-valued flags keep all args."""
+    flags = {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        key = a.removeprefix('--').replace('-', '_')
+        if a.startswith('--') and key in SAFE_FLAGS:
+            vals = []
+            j = i + 1
+            while j < len(argv) and not str(argv[j]).startswith('--'):
+                vals.append(argv[j])
+                j += 1
+            if not vals:
+                flags[key] = True
+            elif key in LIST_FLAGS:
+                flags[key] = vals
+            else:
+                flags[key] = vals[0]
+            i = j
+            continue
+        i += 1
+    return flags
 
 
 def safe_server_info(server):
@@ -182,11 +236,7 @@ def effective(container, base, out):
     # Never dump inspect's Env or unfiltered /get_server_info (may contain API keys).
     info = json.loads(command(['docker', 'inspect', container]))[0]
     argv = info['Config']['Cmd']
-    flags = {}
-    for i, a in enumerate(argv):
-        key = a.removeprefix('--').replace('-', '_')
-        if a.startswith('--') and key in SAFE_FLAGS:
-            flags[key] = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('--') else True
+    flags = launch_flags_from_argv(argv)
     result = {'image_id': info['Image'], 'launch_flags': flags}
     server = {}
     if base:
@@ -284,6 +334,7 @@ def run(out, env):
         facts = '\n'.join(line for line in boot_log.splitlines()
             if any(key in line for key in ('shards already on disk', 'KV Cache',
                 'max_total_num_tokens=', 'CUDA graph', 'Load weight end',
+                'Capture target', 'Capture draft', 'num_tokens_per_req=',
                 'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
                 'Triton SM121 QSA', 'committing PLE n-gram',
                 'file-backed mmap', 'reusing recipe backing file',

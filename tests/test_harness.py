@@ -16,7 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'bench'))
-from experiment import bounded, suites, validate, safe_server_info, run as experiment_run
+from experiment import bounded, suites, validate, safe_server_info, run as experiment_run, launch_flags_from_argv
 from inventory import bind_identity, ple_identity
 from memwatch import Policy, run as watch_run
 from client import chat, chat_stream
@@ -139,6 +139,23 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse(validate('quality', {'failed': 0, 'results': [{'pass': False}]}))
         self.assertFalse(validate('longctx', {'failed': 0, 'results': []}))
         self.assertFalse(validate('agentic_off', {'summary': {'invalid_tool_calls': 1, 'late_recall_pass': True}}))
+        self.assertFalse(validate('streams', {'failed': 0, 'results': [
+            {'concurrency': 1, 'ok': True, 'median_aggregate_tok_s': 10},
+            {'concurrency': 2, 'ok': True, 'median_aggregate_tok_s': 12},
+        ]}))
+        self.assertTrue(validate('streams', {'failed': 0, 'results': [
+            {'concurrency': 1, 'ok': True, 'median_aggregate_tok_s': 10},
+            {'concurrency': 2, 'ok': True, 'median_aggregate_tok_s': 12},
+            {'concurrency': 4, 'ok': True, 'median_aggregate_tok_s': 20},
+        ]}))
+        self.assertFalse(validate('mixedload', {'failed': 0, 'results': [{
+            'ok': True, 'prefill_ttft_s': 1, 'prefill_prompt_tokens': 64000,
+            'prefill_needle_pass': True, 'decode_streams': 1,
+        }]}))
+        self.assertTrue(validate('mixedload', {'failed': 0, 'results': [{
+            'ok': True, 'prefill_ttft_s': 1, 'prefill_prompt_tokens': 64000,
+            'prefill_needle_pass': True, 'decode_streams': 2,
+        }]}))
 
     def test_process_deadline(self):
         with tempfile.TemporaryDirectory() as d:
@@ -233,6 +250,57 @@ class RequestDeadlineTests(unittest.TestCase):
             with patch.dict(os.environ, {'BASE':f'http://127.0.0.1:{server.server_port}','REQUEST_TIMEOUT':'.2','MAX_PROMPT_TOKENS':''}):
                 for fn in (chat,chat_stream):
                     with self.assertRaises(TimeoutError):fn([{'role':'user','content':'test'}])
+        finally:server.shutdown();server.server_close()
+
+    def test_stream_records_chunk_timestamps_and_callback(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n')
+                self.wfile.write(b'data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\n')
+                self.wfile.write(b'data: [DONE]\n\n')
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            seen=[]
+            with patch.dict(os.environ, {'BASE':f'http://127.0.0.1:{server.server_port}','REQUEST_TIMEOUT':'5','MAX_PROMPT_TOKENS':''}):
+                result=chat_stream([{'role':'user','content':'test'}], on_delta=seen.append)
+            self.assertEqual(len(result['chunks']),1)
+            self.assertEqual(result['chunks'][0]['content_chars'],2)
+            self.assertEqual(len(seen),1)
+            self.assertGreaterEqual(result['chunks'][0]['t'],0)
+        finally:server.shutdown();server.server_close()
+
+    def test_worker_thread_skips_sigalrm(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+                try:
+                    for _ in range(8):
+                        self.wfile.write(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'); self.wfile.flush(); time.sleep(.05)
+                    self.wfile.write(b'data: {"usage":{"prompt_tokens":1,"completion_tokens":8}}\n\n')
+                    self.wfile.write(b'data: [DONE]\n\n')
+                except (BrokenPipeError,ConnectionResetError):
+                    pass
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        result={'error': None, 'chunks': None}
+        def run():
+            with patch.dict(os.environ, {'BASE':f'http://127.0.0.1:{server.server_port}','REQUEST_TIMEOUT':'.2','MAX_PROMPT_TOKENS':''}):
+                try:
+                    result['chunks']=len(chat_stream([{'role':'user','content':'test'}])['chunks'])
+                except Exception as exc:
+                    result['error']=type(exc).__name__
+        try:
+            worker=threading.Thread(target=run); begin=time.monotonic(); worker.start(); worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertIsNone(result['error'])
+            self.assertEqual(result['chunks'],8)
+            self.assertGreaterEqual(time.monotonic()-begin, 0.35)
         finally:server.shutdown();server.server_close()
 
 
@@ -358,6 +426,51 @@ class QsaPatchTests(unittest.TestCase):
                 }), 0)
             names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
             self.assertEqual(names, ['smoke', 'prefill', 'quality', 'decode'])
+
+    def test_streams_and_mixedload_insert_after_decode(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            def fake_bounded(args, log, seconds, env=None, guard=None):
+                name = Path(env['OUT']).stem
+                if name == 'smoke':
+                    return 0
+                payload = {'results': [{'pass': True, 'needle_pass': True}], 'failed': 0}
+                if name == 'decode':
+                    payload = {'results': [
+                        {'mode': 'thinking_on', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                        {'mode': 'thinking_off', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                    ]}
+                elif name == 'streams':
+                    payload = {'failed': 0, 'results': [
+                        {'concurrency': c, 'ok': True, 'median_aggregate_tok_s': 10}
+                        for c in (1, 2, 4)
+                    ]}
+                elif name == 'mixedload':
+                    payload = {'failed': 0, 'results': [{
+                        'ok': True, 'prefill_ttft_s': 1.0, 'prefill_prompt_tokens': 64000,
+                        'prefill_needle_pass': True, 'decode_streams': 2,
+                    }]}
+                Path(env['OUT']).write_text(json.dumps(payload))
+                return 0
+            with patch('experiment.bounded', side_effect=fake_bounded):
+                self.assertEqual(suites(out, {
+                    'QUICK': '1', 'SUITE_TIMEOUT': '1', 'STREAMS': '1', 'MIXEDLOAD': '1',
+                }), 0)
+            names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
+            self.assertEqual(names, ['smoke', 'quality', 'decode', 'streams', 'mixedload'])
+            mixed = json.loads((out / 'mixedload.json').read_text())
+            self.assertTrue(mixed['results'][0]['prefill_needle_pass'])
+
+    def test_launch_flags_keep_cuda_graph_bs_list(self):
+        flags = launch_flags_from_argv([
+            'sglang', 'serve', '--model-path', 'm',
+            '--cuda-graph-bs-decode', '1', '2', '3', '4',
+            '--cuda-graph-max-bs-decode', '4',
+            '--disable-prefill-cuda-graph',
+        ])
+        self.assertEqual(flags['cuda_graph_bs_decode'], ['1', '2', '3', '4'])
+        self.assertEqual(flags['cuda_graph_max_bs_decode'], '4')
+        self.assertIs(flags['disable_prefill_cuda_graph'], True)
 
     def test_only_runs_named_suites(self):
         with tempfile.TemporaryDirectory() as d:
