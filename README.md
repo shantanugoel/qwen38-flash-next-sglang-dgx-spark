@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a are accepted; U4b (PLE prefetch) was rejected.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a are accepted; U4b (prefetch) and U4c (RSS trim) were rejected.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -208,8 +208,9 @@ Image digest `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d
 (commit `4ccff141`, MTP token-0 router [#38290](https://github.com/sgl-project/sglang/pull/38290),
 native PLE file backend [#37068](https://github.com/sgl-project/sglang/pull/37068)).
 U1 Triton overlays bundled KDA QSA. U2 ReplaySSM PLE commit stays. Prefetch stays
-off (U4b: 32k cold TTFT 10.24 s on vs 10.23 s off). RSS trimming off until U4c.
-Filename compat reuses `ple_table_51200245760_51200245760.bin`.
+off (U4b: 32k cold TTFT 10.24 s on vs 10.23 s off). RSS trimming stays off (U4c:
+mapping RSS ~0.4 GiB vs 8 GiB budget; 0 trim events in one hour). Filename compat
+reuses `ple_table_51200245760_51200245760.bin`.
 
 Boot 624 s, PLE `128/128 shards already on disk`, Triton SM121 QSA, ReplaySSM PLE
 commit on the serving path. U4a second reuse boot (`u4a-reuse-boot-20260908`)

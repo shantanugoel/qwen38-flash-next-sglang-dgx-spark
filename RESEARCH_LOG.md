@@ -1597,3 +1597,73 @@ known greedy miss as U3/U4a, not a prefetch effect.
 - 120-turn / GSM8K / 120k+ needles not re-run; this is a prefill-I/O item.
 - Native prefetch remains available via env; recipe default stays 0.
 
+## U4c — PLE file RSS trimmer (2026-09-08)
+
+**Decision: rejected.** Keep `SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0`. Native
+#37068 defaults this env to 8.0; the recipe must keep forcing it off. The 8 GiB
+trimmer started (`resident set capped at 8.0 GiB, checked every 30 s`) and then
+never ran: host mapping RSS of `ple_table_51200245760_51200245760.bin` stayed
+0.29–0.43 GiB across a one-hour unique-token soak. Zero `trimmed resident`
+lines. There is no demonstrated memory or stability benefit, and no stall to
+measure. Rollback is the current default (no restore boot).
+
+TAG: `u4c-rss-trim-20260908`.
+Command (detached): `PROFILE=u3 TAG=<tag> SGLANG_QWEN4_PLE_FILE_PREFETCH=0 SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=8 GROWSOAK=1 ONLY=smoke,quality,decode,longctx,growsoak PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Image, digest, packages, checkpoint and PLE identity unchanged from U4a. Clocks
+still 208 / 3003 MHz. Watchdog did not trip. `stop_exit_code=0`. Prefetch stayed
+off.
+
+Boot 599.51 s, `128/128` / 0 copied. KV 524288 tokens. Triton SM121 logged.
+ReplaySSM PLE commit is in `boot-facts.txt` at first verify. Harness
+`experiment_status` is **fail** because (a) quality 11/12 (`effort_thinking_off`
+answered `25` not `24`) and (b) a post-soak `docker logs --tail 8000` missed the
+boot-time ReplaySSM line. That is a harness window, not a missing patch. The
+check now prefers `boot-facts.txt`.
+
+### Growing-context soak
+
+`bench/growsoak.py`: unique n-grams, rotate at 24k prompt tokens, recall the
+planted code every 8 turns.
+
+| | |
+| --- | ---: |
+| requests | **5820/5820** |
+| errors / recall_fail | 0 / 0 |
+| wall | 3600.116 s |
+| sessions | 26 |
+| max prompt tokens | 22451 |
+| median / p95 / max turn s | 0.639 / 0.768 / 1.351 |
+| PLE mapping RSS | 0.29 GiB at ~10 min → 0.43 GiB at ~37 min |
+| MemAvailable min | 10.12 GiB |
+| swap | 0 |
+| trim events | **0** |
+
+End-of-run `spec_accept_length` 3.975 (after growsoak).
+
+### Fast gate
+
+| Suite | Result |
+| --- | --- |
+| smoke | pass |
+| quality | 11/12; `effort_thinking_off` `25` not `24` (same known miss) |
+| decode | pass |
+| longctx 8k/32k | 2/2 needles PASS; 8k 4.06 s → 0.57 s (7.2×); 32k 10.41 s → 0.51 s (20.5×) |
+| growsoak | pass |
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 40.10 (39.91–40.66) | 37.39 (34.61–37.58) |
+| prose ES | 23.95 (21.18–25.69) | 27.02 (23.66–30.14) |
+
+U4a was 40.29 / 31.96 code and 20.73 / 24.24 prose. Ranges overlap. Not a speed
+claim.
+
+### Limits
+
+- Mapping RSS never approached the 8 GiB budget, so `MADV_DONTNEED` stalls were
+  not observed. A 120k+ sequential prefill might grow RSS faster; that remains
+  untested because those prefills have wedged this box.
+- Native default remains 8 GiB; recipe env must stay 0 or a later image will
+  trim without a measured win.
+- 120-turn / GSM8K / 120k+ needles not re-run; this is a memory-control item.
+

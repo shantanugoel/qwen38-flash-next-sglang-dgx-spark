@@ -129,7 +129,7 @@ docker run -d --name "${CONTAINER}" --init \
     --fp4-gemm-backend flashinfer_cutlass \
     --page-size "${PAGE_SIZE:-64}" \
     --mamba-radix-cache-strategy "${MAMBA_STRATEGY:-extra_buffer}" \
-    --mamba-track-interval 64 \
+    --mamba-track-interval "${MAMBA_TRACK_INTERVAL:-64}" \
     --max-mamba-cache-size 20 \
     --mamba-ssm-dtype float32 \
     --chunked-prefill-size "${PREFILL}" \

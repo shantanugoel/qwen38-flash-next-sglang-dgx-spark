@@ -72,10 +72,11 @@ def validate(name, report):
         return (bool(rows) and report['failed'] == 0
                 and all(r.get('ttft_s', 0) > 0 and r.get('prompt_tokens', 0) > 0
                         and r.get('needle_pass') is True for r in rows))
-    if name == 'soak':
+    if name in ('soak', 'growsoak'):
         s = report['summary']
         target = float(s.get('target_seconds') or 0)
-        return (s.get('errors', 1) == 0 and s.get('ok', 0) > 0
+        extra = True if name != 'growsoak' else s.get('recall_fail', 1) == 0
+        return (extra and s.get('errors', 1) == 0 and s.get('ok', 0) > 0
                 and s.get('requests', 0) == len(report.get('results') or [])
                 and (target <= 0 or float(s.get('seconds') or 0) >= 0.9 * target))
     return False
@@ -105,6 +106,9 @@ def suites(out, env, guard=None):
     if env.get('SOAK_SECONDS'):
         tasks += [('soak', [sys.executable, str(ROOT / 'bench/soak.py')],
                    {'SOAK_SECONDS': env['SOAK_SECONDS']})]
+    if env.get('GROWSOAK') == '1':
+        tasks += [('growsoak', [sys.executable, str(ROOT / 'bench/growsoak.py')],
+                   {'SOAK_SECONDS': env.get('SOAK_SECONDS', '3600')})]
     if only := env.get('ONLY'):
         wanted = {name.strip() for name in only.split(',') if name.strip()}
         tasks = [t for t in tasks if t[0] in wanted]
@@ -119,7 +123,7 @@ def suites(out, env, guard=None):
             timeout = float(env.get('SUITE_TIMEOUT', '900'))
             if name == 'gsm8k':
                 timeout = float(env.get('GSM8K_TIMEOUT', str(timeout)))
-            if name == 'soak':
+            if name in ('soak', 'growsoak'):
                 timeout = float(env.get('SOAK_SECONDS', '3600')) + 300
             rc = bounded(args, out / (name + '.log'), timeout, child_env, guard)
             row['exit_code'] = rc
@@ -282,7 +286,8 @@ def run(out, env):
                 'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
                 'Triton SM121 QSA', 'committing PLE n-gram',
                 'file-backed mmap', 'reusing recipe backing file',
-                'WILLNEED prefetch', 'RSS trimmer')))
+                'WILLNEED prefetch', 'RSS trimmer', 'resident set capped',
+                'trimmed resident')))
         (out / 'boot-facts.txt').write_text(facts)
         if env.get('QSA_KERNEL_CHECK') == '1':
             if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
@@ -292,6 +297,12 @@ def run(out, env):
         prefetch = str(env.get('SGLANG_QWEN4_PLE_FILE_PREFETCH', '0')).strip().lower()
         if prefetch not in ('0', '', 'false', 'no') and 'WILLNEED prefetch' not in facts:
             raise RuntimeError('PLE file prefetch did not log at boot')
+        try:
+            rss_budget = float(env.get('SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB', '0') or 0)
+        except ValueError:
+            rss_budget = 0.0
+        if rss_budget > 0 and 'resident set capped' not in facts:
+            raise RuntimeError('PLE RSS trimmer did not log at boot')
         env['MODEL'] = env['SERVED_NAME']
         rc = suites(out, env, guard)
         result['status'] = 'pass' if rc == 0 else 'fail'
@@ -310,17 +321,26 @@ def run(out, env):
         except (OSError, ValueError):
             result['metrics'] = {}
         if env.get('PROFILE') in ('u2', 'u3') and env.get('SPEC', 'nextn') != 'off':
-            served_proc = subprocess.run(['docker', 'logs', '--tail', '8000', container],
-                                         capture_output=True, text=True, timeout=20)
-            served = served_proc.stdout + served_proc.stderr
-            if 'committing PLE n-gram/short-conv state' not in served:
-                raise RuntimeError(
-                    'ReplaySSM PLE commit did not log; patch is not on the serving path')
+            # First verify is in boot-facts. A later --tail of a long soak can
+            # scroll that line off the log window; do not treat that as missing.
+            if 'committing PLE n-gram/short-conv state' not in facts:
+                served_proc = subprocess.run(['docker', 'logs', '--tail', '8000', container],
+                                             capture_output=True, text=True, timeout=20)
+                served = served_proc.stdout + served_proc.stderr
+                if 'committing PLE n-gram/short-conv state' not in served:
+                    raise RuntimeError(
+                        'ReplaySSM PLE commit did not log; patch is not on the serving path')
     finally:
         if owned:
             tail = subprocess.run(['docker', 'logs', '--tail', '200', container],
                                   capture_output=True, text=True, timeout=15)
             (out / 'server-tail.log').write_text(tail.stdout + tail.stderr)
+            trim = subprocess.run(['docker', 'logs', '--tail', '20000', container],
+                                  capture_output=True, text=True, timeout=20)
+            served = trim.stdout + trim.stderr
+            (out / 'rss-trim.log').write_text('\n'.join(
+                line for line in served.splitlines()
+                if 'resident set' in line or 'trimmed resident' in line))
             # U0 experiments own their server lifecycle; never leave an unguarded
             # or known-old server serving unattended after the benchmark ends.
             stopped = subprocess.run(['docker', 'stop', '-t', '30', container],

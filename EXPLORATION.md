@@ -3,7 +3,7 @@
 **Current campaign:** [September upstream validation plan](UPSTREAM_PLAN.md).
 The August plan below is historical; stale TODO/status and skip-list entries do
 not authorize rerunning completed experiments. See RESEARCH_LOG.md for outcomes.
-U0–U4a are accepted; U4b was rejected (prefetch stays off). U4c and later campaign items have not started.
+U0–U4a are accepted; U4b/U4c were rejected (prefetch and RSS trim stay off). U5 and later campaign items have not started.
 
 Goal: keep a **single DGX Spark / GB10** recipe, stay on **Radix NVFP4**, and raise
 quality then speed for long-horizon agentic work (search/scrape/facts/tools/code/prose,
@@ -37,7 +37,7 @@ QSA SM121 Triton (#36845 overlay; bundled KDA stays off), ReplaySSM verify commi
 PLE state (#37794 `spec_utils` hunk), MTP NEXTN 3/1/4 + `unquant`, decode
 `trtllm_mha`, prefill `triton`, CUDA graphs on, `--mem-fraction-static 0.95`,
 `--context-length 262144`, `--chunked-prefill-size 4096`, `--max-running-requests 4`.
-Prefetch was measured in U4b and stays off; RSS trimming stays off until U4c.
+Prefetch was measured in U4b and stays off; RSS trimming was measured in U4c and stays off.
 
 Published on this box 2026-08-27 (clock-capped GB10, thinking **off**): **40.2 tok/s
 code** (median 38.8) / **~20 tok/s** thinking-on chat. vLLM mmap+MTP=2 was ~27 tok/s.

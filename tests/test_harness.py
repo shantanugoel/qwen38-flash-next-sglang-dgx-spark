@@ -395,6 +395,34 @@ class QsaPatchTests(unittest.TestCase):
             names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
             self.assertEqual(names, ['smoke', 'quality', 'decode', 'ple_spec', 'gsm8k'])
 
+    def test_growsoak_inserts_when_enabled(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            def fake_bounded(args, log, seconds, env=None, guard=None):
+                name = Path(env['OUT']).stem
+                if name == 'smoke':
+                    return 0
+                payload = {'results': [{'pass': True, 'needle_pass': True}], 'failed': 0}
+                if name == 'decode':
+                    payload = {'results': [
+                        {'mode': 'thinking_on', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                        {'mode': 'thinking_off', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                    ]}
+                elif name in ('growsoak', 'soak'):
+                    payload = {'results': [{'pass': True}], 'failed': 0,
+                               'summary': {'ok': 1, 'errors': 0, 'recall_fail': 0,
+                                           'requests': 1, 'seconds': 1.0,
+                                           'target_seconds': 1}}
+                Path(env['OUT']).write_text(json.dumps(payload))
+                return 0
+            with patch('experiment.bounded', side_effect=fake_bounded):
+                self.assertEqual(suites(out, {
+                    'QUICK': '1', 'SUITE_TIMEOUT': '1', 'GROWSOAK': '1',
+                    'SOAK_SECONDS': '1',
+                }), 0)
+            names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
+            self.assertEqual(names, ['smoke', 'quality', 'decode', 'soak', 'growsoak'])
+
 
 class ReplaySsmPleCommitTests(unittest.TestCase):
     def load_patcher(self):
