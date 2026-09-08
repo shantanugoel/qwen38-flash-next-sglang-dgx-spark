@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a, U6 and U7a are accepted; U4b/U4c/U5a were rejected; U5b skipped; U7b is deferred after its baseline failed the common gate.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a, U6, U7a and U7b are done; U4b/U4c/U5a and the U7b 2048 chunk candidate were rejected; U5b skipped.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -8,10 +8,15 @@ state ([#37794](https://github.com/sgl-project/sglang/pull/37794) `spec_utils` h
 only; that PR's NGRAM feature is not ported). Native PLE file backend
 ([#37068](https://github.com/sgl-project/sglang/pull/37068)) with recipe filename reuse.
 The later KDA overlay from #36845 passed isolated tensor replay here and then emitted token-id 0 on a 32k needle;
-it is not the serving default. The U7b baseline passed the separate 8k/32k
-needle suite and three actual 64k mixed-load needles, but failed one of eight
-prefill recall checks by refusal and scored 11/12 on quality. The server was
-stopped after the failed gate; 2048/1024 tuning was not run. 120k–210k needles are still
+it is not the serving default. U7b compared chunked prefill 4096 against 2048 on a 64k
+prefill arriving during two decodes: 2048 was **worse** on both the p95
+streamed-chunk gap (29.83 s vs 26.12 s) and mixed TTFT (31.26 s vs 28.27 s), so
+`PREFILL` stays 4096 and no mixed-load profile is shipped. With NEXTN on,
+SGLang forbids mixed chunked prefill, so decode is starved for the whole
+prefill at any chunk size. The one quality case that keeps flipping
+(`effort_thinking_off`) was resent 20x at temperature 0 in a single boot and
+answered `24` 9x, `28` 7x, `25` 4x — treat any single sample of it as noise
+(`bench/effort_probe.py`). 120k–210k needles are still
 unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
@@ -183,6 +188,7 @@ OpenAI-compatible API.
 | `bench/agentic.py` | long-horizon tool-calling session; TTFT / decode / cache-hit banded by turn |
 | `bench/bfcl.py` | fixed 100-case BFCL subset (AST, irrelevance, multi-turn) |
 | `bench/gsm8k.py` | GSM8K sanity slice |
+| `bench/effort_probe.py` | resends one deterministic-sampling case N times to separate an unstable case from a regression (`EFFORT_PROBE=1`) |
 | `scripts/bench_tb.sh` | Terminal-Bench subset via Harbor |
 
 **What this repo does NOT establish:** these numbers show the *serving stack* is
@@ -440,6 +446,7 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | vLLM | **Untested.** It needs `--no-enable-prefix-caching` on sm_121, and prefix caching is worth 21× warm prefill here |
 | `MAX_RUNNING=1` | No gain, **+21% wall clock** on a 40-turn session |
 | `PREFILL=1024` | 32k TTFT **12.31 s vs 10.37 s** at 4096 — smaller chunks cost TTFT |
+| `PREFILL=2048` (U7b) | **Rejected.** Mixed-load p95 chunk gap **29.83 s vs 26.12 s**, mixed TTFT 31.26 s vs 28.27 s, 32k cold TTFT 11.17 s vs 10.11 s. Speculative decoding forbids `enable_mixed_chunk`, so decode waits out the whole prefill at any chunk size |
 | `--language-only` (vision off) | **Does not disable vision.** It is for encoder *disaggregation*; with no encoder service configured the local tower still runs and still answers image questions correctly. 89 MiB and 0 KV difference — there was never a headroom argument |
 | Widened TRT-LLM QSA gate (`is_sm120_supported()`) | **Rejected.** On SM121 that call is XQA, not trtllm-gen. Silent token-id-0 loops from ~120k. Retired by #36806/#36845 |
 | #36845 KDA SM121 overlay on this image | **Rejected for serving.** Isolated rel-L2 ≤ 0.0024 and CUDA-graph replay passed; a 32k needle then returned 64× `!`. Triton-only on the same stack passed |

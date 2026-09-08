@@ -156,6 +156,11 @@ class HarnessTests(unittest.TestCase):
             'ok': True, 'prefill_ttft_s': 1, 'prefill_prompt_tokens': 64000,
             'prefill_needle_pass': True, 'decode_streams': 2,
         }]}))
+        # effort_probe is descriptive: a truncated report still fails, but a
+        # complete report of wrong answers passes and is read as evidence.
+        self.assertFalse(validate('effort_probe', {'summary': {'n': 2}, 'results': [{'pass': True}]}))
+        self.assertTrue(validate('effort_probe', {'summary': {'n': 2, 'passed': 0},
+                                                  'results': [{'pass': False}, {'pass': False}]}))
 
     def test_process_deadline(self):
         with tempfile.TemporaryDirectory() as d:

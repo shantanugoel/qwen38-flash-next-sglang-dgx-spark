@@ -60,6 +60,9 @@ def validate(name, report):
         s = report['summary']
         return (s['invalid_tool_calls'] == 0 and s['late_recall_pass'] is True
                 and s['turns'] > 0 and len(report['turns']) == s['turns'])
+    if name == 'effort_probe':
+        s = report['summary']
+        return s.get('n', 0) > 0 and len(report.get('results') or []) == s['n']
     if name == 'ple_spec':
         rows = report['results']
         return bool(rows) and report['failed'] == 0 and all(r['pass'] is True for r in rows)
@@ -106,6 +109,12 @@ def suites(out, env, guard=None):
                     'N': env.get('PREFILL_N', env.get('N', '3'))})]
     tasks += [('quality', [sys.executable, str(ROOT / 'bench/quality.py')], {'EFFORT': '1'}),
               ('decode', [sys.executable, str(ROOT / 'bench/decode.py')], {'THINKING': 'both', 'N': env.get('N', '3')})]
+    if env.get('EFFORT_PROBE') == '1':
+        # Descriptive: how stable is the one quality case that flips between
+        # boots of the same accepted configuration? Never gates a decision.
+        tasks += [('effort_probe', [sys.executable, str(ROOT / 'bench/effort_probe.py')],
+                   {'N': env.get('EFFORT_PROBE_N', '20'),
+                    'THINKING': env.get('EFFORT_PROBE_THINKING', 'off')})]
     if env.get('STREAMS') == '1':
         tasks += [('streams', [sys.executable, str(ROOT / 'bench/streams.py')],
                    {'N': env.get('STREAMS_N', env.get('N', '3')),

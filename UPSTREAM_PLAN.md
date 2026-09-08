@@ -1,6 +1,7 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a, U6 and U7a accepted; U4b/U4c/U5a rejected; U5b skipped; U7b deferred; U8–U12 not finished**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a, U6, U7a and U7b accepted-as-measured; U4b/U4c/U5a and the U7b
+2048 candidate rejected; U5b skipped; U8–U12 in progress**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -20,8 +21,10 @@ U6 was accepted the same day: 64k NEXTN `--speculative-token-map` is now the
 serving default (thinking-off code 40.29 → 47.6 tok/s on two launches). Further
 map sizes were not measured. U7a was accepted the same day: MTP graphs already
 capture `bs=[1,2,3,4]` under `MAX_RUNNING=4`; no trim. 1/2/4-stream baseline
-logged. U7b baseline was executed on September 8 but failed the common gate; candidate
-chunk sizes are deferred. Later items remain unexecuted.
+logged. U7b completed on September 8: a second 4096 launch plus a 2048 candidate.
+2048 was rejected (p95 chunk gap 29.825 s vs 26.115 s; mixed TTFT +10.6%),
+`PREFILL` stays 4096, and the earlier gate failure was shown to be an unstable
+quality case (9/20 correct at temperature 0 in one boot). Later items follow.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -217,11 +220,23 @@ against this endpoint; never report a TB score measured on this Spark.
   and 1/2/4-stream performance. Log decision and commit.
   TAG `u7a-streams-baseline-20260908`. Capture already `bs=[1,2,3,4]`; no trim.
   Streams c=1/2/4 aggregate 48.53 / 77.74 / 104.38 tok/s. Defaults unset. Accepted.
-- [x] U7b: **deferred after failed baseline gate**, TAG `u7b-4096-20260908`.
-  Prefill 7/8 (one refusal), quality 11/12 (thinking-off change=25, expected 24).
-  Actual 64k mixed-load 3/3 passed: median TTFT 28.746 s, p95 chunk gap
-  26.538382 s, 2.77 output tokens/chunk. No 2048/1024 candidate launched;
-  4096 unchanged. Server stopped. See RESEARCH_LOG U7b. Original scope:
+- [x] U7b: **2048 rejected; default stays 4096.** TAGs `u7b-4096-20260908`,
+  `u7b-4096-confirm-20260908` (second launch) and `u7b-2048-20260908`.
+  Primary metric, median p95 streamed-chunk gap: 26.538 / 26.115 s at 4096 vs
+  **29.825 s at 2048** (+14.2%); mixed TTFT 28.746 / 28.269 vs 31.264 s; 32k cold
+  TTFT 10.218 / 10.107 vs 11.167 s. 1024 not launched (monotone direction; the
+  historical sweep already measured 12.31 s at 1024). No opt-in mixed-load
+  profile is shipped. Mechanism: `server_args.py` asserts `not enable_mixed_chunk`
+  under any speculative algorithm, so with NEXTN the scheduler never mixes decode
+  into a prefill batch and both decode streams stall for the entire 64k prefill
+  whatever the chunk size. The earlier deferral's gate failure is resolved:
+  `bench/effort_probe.py` resent the failing `effort_thinking_off` case 20x at
+  temperature 0 in one boot and got `24` 9x, `28` 7x, `25` 4x, so a single
+  11/12 or 12/12 on that case carries no signal; the failed 8k needle was the
+  same refusal string, and the second 4096 launch passed 8/8. First attempt
+  (`u7b-4096-20260908`): prefill 7/8, quality 11/12, 3/3 mixed needles, median
+  TTFT 28.746 s, p95 gap 26.538 s, 2.77 tokens/chunk. See RESEARCH_LOG U7b and
+  "U7b (continued)". Original scope:
   hold graphs fixed; compare prefill 4096 to 2048/1024, optionally 8192,
   one candidate and commit at a time. Measure cold TTFT, aggregate throughput,
   and p50/p95/p99 streamed-chunk gaps when a 64k prefill arrives during two

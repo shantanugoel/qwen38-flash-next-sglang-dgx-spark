@@ -1939,3 +1939,98 @@ PLE-state commit, BF16 KV allocation and unchanged image/flags captured.
 Validation: 37 harness tests plus 3 boundary-gap tests passed; diff check passed.
 Overall experiment status **fail**, stop_exit_code=0. Defaults unchanged.
 Next: independent U8a source audit, with dependent serving tests blocked.
+
+
+## U7b (continued) — 4096 second launch, 2048 candidate, unstable-case probe (2026-09-08)
+
+**Decision: rejected `PREFILL=2048`; the accepted default stays `PREFILL=4096`.
+1024 was not launched. The earlier "failed common gate" that deferred U7b is
+resolved: it was a Bernoulli quality case, not a regression.**
+
+Baseline commit `82dd1b0` (U7b docs). Image digest
+`sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`,
+image ID `sha256:cdd9649ba1cf472344fd1e11e7cbaa7161a0624329b522931646537cc1c15701`,
+source `4ccff141dbe992794f9da6c3aa23535b4f72000d`. Packages unchanged:
+Torch 2.13.0+cu130, FlashInfer 0.6.17, Triton 3.7.1, Transformers 5.12.1,
+ModelOpt 0.46.0, sglang-kernel 0.4.6.post1. Radix revision
+`7b719225242aacd3dbd3f9407468c2ee9a9d2594`; PLE inode 19924234, 128 shards,
+51200245760 bytes, sampled SHA256 `a13a022a5e6f0e39bdd564a9c4483e158658b0242f85b3c2e62b1929ab18ac9d`
+(three byte windows per shard, not a full checksum). Native 262144 context,
+BF16 KV, FP32 SSM, extra_buffer, tracking 64, MAX_TOTAL=524288, MAX_RUNNING=4,
+NEXTN 3/1/4 with the 64k draft map, graph bs=[1,2,3,4], PLE prefetch/trimmer 0,
+driver 580.173.02, clocks untouched, vision retained. One variable per run:
+`PREFILL`.
+
+Sanitized launches (background `Popen(start_new_session=True)`, runtime PLE/HF
+cache reuse, one GPU occupant, one experiment at a time):
+
+    TAG=u7b-4096-confirm-20260908 PROFILE=u3 PREFILL=4096 MIXEDLOAD=1 \
+      PREFILL_BENCH=1 N=3 ONLY=smoke,prefill,quality,decode,mixedload,longctx \
+      ./scripts/run_config.sh
+    TAG=u7b-2048-20260908 PROFILE=u3 PREFILL=2048 MIXEDLOAD=1 PREFILL_BENCH=1 \
+      N=3 EFFORT_PROBE=1 EFFORT_PROBE_N=20 \
+      ONLY=smoke,prefill,quality,effort_probe,decode,mixedload,longctx \
+      ./scripts/run_config.sh
+
+Predeclared primary metric (unchanged from the deferred attempt): median
+per-repeat p95 streamed-chunk gap while a 64k prefill arrives during two
+decodes; >=5% improvement required, with cold TTFT and output throughput
+reported as the tradeoff.
+
+| Metric (median of 3) | 4096 (first) | 4096 (second launch) | 2048 |
+| --- | ---: | ---: | ---: |
+| Mixed p95 chunk gap s | 26.538 | 26.115 | **29.825** |
+| p95 range s | 26.483–26.555 | 26.092–26.121 | 29.787–29.841 |
+| Mixed prefill TTFT s | 28.746 | 28.269 | 31.264 |
+| Output tokens per chunk | 2.77 | 2.81 | 2.78 |
+| Aggregate output tok/s | 25.10 | 29.20 | 24.54 |
+| 32k cold TTFT s | 10.218 | 10.107 | 11.167 |
+| 8k PLE-warm TTFT s | 2.716 | 2.687 | 2.871 |
+| prefix-warm 32k TTFT s | 0.316 | 0.315 | 0.325 |
+| code decode off tok/s | 47.46 | 49.02 | 48.27 |
+| prose decode off tok/s | 23.28 | 21.36 | 20.64 |
+| Boot s | 551.01 | 590.84 | 576.78 |
+| Min MemAvailable / MemFree GiB | 10.660 / 0.683 | 10.369 / 0.876 | 10.667 / 0.975 |
+
+2048 is 14.2% *worse* on the primary metric and 10.6% worse on mixed TTFT; it
+is rejected. 1024 was not launched: the direction is monotone here and the
+historical sweep already measured 32k TTFT 12.31 s at 1024 vs 10.37 s at 4096.
+No opt-in mixed-load profile is shipped, because no chunk size improved the
+metric it was supposed to improve.
+
+Mechanism (read in the pinned image, not inferred from the numbers):
+`server_args.py` asserts `not enable_mixed_chunk` whenever a speculative
+algorithm is set, and our accepted recipe runs NEXTN. With mixed chunked
+prefill unavailable, `get_new_batch_prefill` keeps returning the continuing
+chunked request and the scheduler runs prefill before decode every loop, so
+the two decode streams are starved for the whole 64k prefill regardless of
+chunk size. Smaller chunks only lengthen that prefill. This is a property of
+speculative decoding in this engine version, not a tuning failure; a chunk-size
+lever cannot shorten the stall while NEXTN is on.
+
+**The deferring gate failure was an unstable case.** `bench/effort_probe.py`
+(new) resends the exact `effort_thinking_off` quality request 20 times at
+temperature 0 in one boot. Result on the 2048 boot:
+`9/20 answered 24; answers={'24': 9, '28': 7, '25': 4}`. The same case answered
+`28` in U7b, `25` in the 4096 second launch, `28` in the 2048 run and `24` on
+the U6/U7a boots of this same configuration. One sample of this case therefore
+carries no signal about a code or flag change, and the 11/12 quality scores in
+both runs above are that case alone. Sampling is temperature 0; the variation
+comes from speculative decoding and batching, not from the request.
+The 8k `prefix_warm` needle that failed in the 2048 run returned the same
+refusal string seen in U7b — "I cannot provide the access code as it is not a
+real-world fact" — with the 16-token bound; the 4096 second launch passed 8/8.
+Refusal, not lost recall, and not attributable to chunk size.
+
+Everything else passed on both launches: smoke and positional vision, tool
+parsing, executed code, multi-turn fact, both thinking modes, separate 8k/32k
+needles, cold and repeated-prefix TTFT, three actual 64k mixed prompts
+(63981–63985 tokens) with needles passing, watchdog never tripped, swap 0,
+`stop_exit_code` 0 on both. `experiment_status.json` still reads `fail` on both
+runs because the harness counts the unstable quality case; that binary status
+is not the decision. Uncertainty: three repeats per metric on one host; decode
+medians overlap between all three runs; no 120-turn or expanded-quality suite
+was rerun for this item.
+
+Rollback: none needed. `PREFILL` default was never changed from 4096 and the
+2048 run's flags were per-run environment only. Next item: U8a.
