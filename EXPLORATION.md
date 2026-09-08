@@ -1,9 +1,10 @@
 # Exploration plan — one-GB10 Flash-Next recipe
 
-**Current campaign:** [September upstream validation plan](UPSTREAM_PLAN.md).
-The August plan below is historical; stale TODO/status and skip-list entries do
-not authorize rerunning completed experiments. See RESEARCH_LOG.md for outcomes.
-U0–U4a, U6 and U7a are accepted; U4b/U4c/U5a were rejected; U5b was skipped.
+**Current campaign:** the [September upstream validation plan](UPSTREAM_PLAN.md)
+is complete through U12. U11's optional branches were deferred and U12 closed
+from cumulative validation with the unrun two-hour mixed-load soak recorded as
+a limit. The August plan below is historical; its outcomes are reconciled here.
+See RESEARCH_LOG.md for the full decision trail.
 
 Goal: keep a **single DGX Spark / GB10** recipe, stay on **Radix NVFP4**, and raise
 quality then speed for long-horizon agentic work (search/scrape/facts/tools/code/prose,
@@ -218,57 +219,41 @@ first), one held back (the prefill/graph bundle: worst prose-off, one borderline
 quality failure, and unattributed), and one structural negative (alternative GDN
 kernels are unreachable — compressed QSA pins `page_size=64`).
 
-### Step 12 — Radix cache A/B — **IN PROGRESS**
+### Step 12 — Radix cache A/B — **DONE, REJECTED**
 
-`--disable-radix-cache` with the **full** bench, on top of the adopted
-`--enable-gdn-replayssm-spec`. The QUICK sweep could not answer this: short
-unique prompts make the prefix cache irrelevant by construction, which is why
-`radix-off-triton` looked equal to baseline there. The 120-turn session is where
-the cost shows.
+Disabling the Radix cache raised 40-turn TTFT from 0.57 s to 2.32 s and climbing,
+removed the 21x 32k resend benefit, and increased wall time 73% without improving
+reliability. Prefix caching remains enabled.
 
 ### Step 13 — `--enable-gdn-replayssm-spec` — **DONE, ADOPTED**
 
 +7.6% code decode, agentic decode 51.7 vs 49.6, `spec_accept_length`
 3.80 → 3.95, 12/12 quality, same KV, 2.1 GiB less GPU. In `serve.sh` defaults.
 
-### Step 14 — 512k optional — **TODO**
+### Step 14 — 512k optional — **DONE, REJECTED**
 
-```
-CONTEXT=524288 MAX_TOTAL=524288 MAX_RUNNING=1 MEMFRAC=0.82 PREFILL=1024
-```
+The attempted 512k configuration booted but exposed only 201984 KV tokens,
+below the native 262k recipe. The static-YaRN override did not configure this
+checkpoint's sectioned mrope and effective `rope_type` stayed `default`.
+Native 262144 remains the only supported context.
 
-**The published Qwen YaRN recipe does not apply to this checkpoint.** There is no
-`rope_scaling` field; `text_config.rope_parameters` is **mrope**:
+### Step 15 — Vision off — **DONE, NOT APPLICABLE**
 
-```json
-{"mrope_interleaved": true, "mrope_section": [11, 11, 10],
- "partial_rotary_factor": 0.25, "rope_theta": 10000000, "rope_type": "default"}
-```
+`--language-only` did not remove the local vision tower; it selects encoder
+disaggregation. The positional vision check still passed, GPU memory differed
+by only 89 MiB, and KV capacity was unchanged. Vision remains enabled.
 
-So the override must target `text_config.rope_parameters` and preserve the mrope
-fields, and `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1` must be set or
-`_derive_context_length` refuses 524288 outright. Whether YaRN composes with
-sectioned mrope at all is unknown — a clean failure here is an acceptable
-outcome for an optional feature, but it must be documented as *why*, not as
-"not tried". **Retest `--mamba-full-memory-ratio 0.3` in this step** — it is
-inert at 262k because `--max-total-tokens` binds first, so this is the only
-regime where it can pay off. Do not make 512k default even if it boots.
+### Step 16 — vLLM — **DEFERRED IN U11**
 
-### Step 15 — Vision off — **TODO**
+The optional comparison was closed without a new run. The historical SM121 path
+required disabling prefix caching and measured about 25–28 tok/s, while the
+accepted SGLang recipe reaches about 47.6 tok/s and preserves warm-prefix reuse.
 
-One boot with `--language-only`, report both numbers, then revert. Vision stays.
+### Step 17 — Final recipe — **DONE**
 
-### Step 16 — vLLM — **NOT PLANNED**
-
-Needs `--no-enable-prefix-caching` on sm_121. Prefix caching is what carries this
-use case (99.0% hit, 21× warm prefill). Recorded as **untested**, not compared.
-
-### Step 17 — Final recipe — **TODO**
-
-`serve.sh` defaults are already updated with `--enable-gdn-replayssm-spec`.
-Remaining: rewrite the README Measured table with the new numbers (decode
-thinking on/off, agentic 120-turn bands both modes, needles, prefix-cache TTFT,
-BFCL single-turn 72.5%, GSM8K 19/20, vision on/off) and the dead-end list.
+The September U0–U12 campaign supersedes this August checklist. README contains
+the final defaults, measured figures, rejected paths and explicit limits; see
+UPSTREAM_PLAN.md and RESEARCH_LOG.md for the decision trail.
 
 ## Skip list (intentional)
 

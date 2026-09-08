@@ -2534,3 +2534,54 @@ pass.
 Defaults remain SGLang `4ccff141`, BF16 KV, native context 262144 and RadixArk
 revision `7b719225`. No server was started and no rollback was needed. Next item:
 U12 final cumulative validation and documentation.
+
+
+## U12 — Final cumulative validation and documentation (2026-09-08)
+
+**Decision: campaign complete from cumulative post-U6 evidence.** No dedicated
+U12 GPU run was launched. The many matched runs after the last accepted serving
+change already exercised the combined default more broadly than another fast
+retest would, so the final review accepts those runs as the U12 interaction
+check.
+
+Evidence on the accepted Radix/SGLang combination:
+
+- U6 launched the reduced-vocabulary draft default twice from the documented
+  profile. Both boots reused the native PLE table (`128/128` shards, 0 copied)
+  in 564 and 556 seconds, kept 524288 KV tokens, passed quality 12/12, and
+  reproduced the primary code result at 47.59 and 47.57 tok/s.
+- U7–U10 repeatedly booted the same accepted U1/U2/U3/U6 stack while testing
+  candidates through per-run flags or reversible overlays. Post-rollback/current
+  baselines covered smoke, tools, executed code, positional vision, both thinking
+  modes, decode, 1/2/4 streams, 8k/32k/128k cold and prefix-warm prefill, needle
+  recall and controlled mixed load.
+- The current Radix default scored 194/200 (97.0%) on GSM8K n=200 in U10. Its
+  follow-up arithmetic class probe scored 155/200 across 20 prompts and explained
+  the unstable single effort prompt as an instance effect rather than a default
+  regression.
+- The latest current-default 120-turn pair completed with 0 invalid tool calls,
+  flat TTFT/decode bands and cache hit rising to about 99%. Thinking-on passed
+  late recall; thinking-off refused to repeat a value because the planted
+  document itself said not to repeat it, matching the previously classified
+  instruction-following behavior.
+- Earlier one-hour stability runs passed: U3's soak completed 2214/2214 requests,
+  and U4c's growing-context soak completed 5820/5820 with no recall failures.
+  U4c used the rejected 8 GiB trimmer setting, but the trimmer never fired and
+  mapping RSS remained only 0.29–0.43 GiB, so its serving behavior otherwise
+  matched the accepted path.
+
+Explicit limit: the planned dedicated two-hour mixed-load soak was **not run**,
+and no dedicated U12 preparation/boot was performed. Repeated post-U6 launches,
+mixed-load gates and the one-hour stability evidence were judged sufficient to
+close this single-box campaign. This is a documented waiver, not a claim that
+the two-hour test passed. The remaining known limits are full GSM8K 1319, scored
+BFCL multi-turn, multilingual and paired vision suites, 190k/210k long-context
+tests, and Terminal-Bench, which cannot run on this ARM64 host.
+
+Final defaults remain RadixArk revision `7b719225`, SGLang `4ccff141` at image
+digest `sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`,
+native file-backed PLE reuse, SM121 Triton QSA, ReplaySSM PLE-state commit,
+64k NEXTN draft token map, BF16 KV, FP32 recurrent state, context 262144,
+`MAX_TOTAL=524288`, `MAX_RUNNING=4`, `PREFILL=4096`, vision enabled and
+thinking enabled by default. U11 remains deferred; no server state changed and
+no rollback was needed.

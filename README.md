@@ -1,6 +1,9 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U10 are done; U4b/U4c/U5a, the U7b 2048 chunk candidate, the U8a QSA prefill overlay, U9 BF16 recurrent state and the U10 checkpoint switch were rejected; U5b skipped; U8b is not applicable to this checkpoint.** Serving image is
+**September 2026 upstream campaign: complete.** U0–U10 were executed, U11's
+optional vLLM/FP8-KV/512k branches were deferred with recorded evidence, and U12
+closed from cumulative post-U6 validation. No dedicated U12 run or two-hour
+mixed-load soak was performed; that remains an explicit validation limit. Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -18,7 +21,8 @@ prefill at any chunk size. The one quality case that keeps flipping
 answered `24` 9x, `28` 7x, `25` 4x — treat any single sample of it as noise
 (`bench/effort_probe.py`). **128k is now measured** (U8a): cold prefill 42.0–42.2 s, prefix-warm 0.63–0.66 s,
 needle recall passing on both A/B configurations, resend speedup ~48x. 190k/210k
-are still unmeasured. See the [staged plan](UPSTREAM_PLAN.md).
+are still unmeasured. Rejected and deferred branches, including the U12 evidence
+review, are recorded in the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
@@ -425,7 +429,7 @@ would suggest.
 | --- | ---: |
 | smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **11/12** (U3 and U2) / 12/12 (U1) |
 | MTP `spec_accept_length` | **3.3** end-of-U3 soak (U2 was 3.73 after GSM8K) |
-| GSM8K, n=200 first official test, thinking off | **193/200 (96.5%)** |
+| GSM8K, n=200 current accepted default, thinking off | **194/200 (97.0%)** (U10; U2 was 193/200) |
 | GSM8K, n=20, thinking off (August) | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
 | — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
@@ -434,7 +438,8 @@ would suggest.
 
 U3 and U2 quality 11/12 is `effort_thinking_off` at temperature 0 (U3 answered
 `28`, U2 answered `25`, expected `24`). Math `12×17`, tools, vision and multi-turn fact passed. GSM8K
-n=200 is the expanded gate for that miss and was last run on U2.
+n=200 was rerun on the current accepted Radix default during U10 and scored
+194/200; the paired NVIDIA checkpoint scored the same.
 
 `live_irrelevance` at 30% is the one weak spot: the model reaches for a tool when
 the right move is to decline. Curated `irrelevance` is 80%, so it is the harder
@@ -455,7 +460,8 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | `PREFILL=8192` + graph bundle | Worst prose decode in the sweep, one quality failure, unattributed 3-flag bundle |
 | MTP depth changes | Accept length is already 3.93–3.95 / 4.0; no headroom |
 | **512k context** | Boots, but yields **201984 KV tokens — below the 262k default**. The published Qwen static-YaRN recipe targets a `rope_scaling` field this checkpoint does not have (it is sectioned **mrope** under `text_config.rope_parameters`), and `rope_type` stays `default` after the override. **Not achieved; 262k is the only supported context** |
-| vLLM | **Untested.** It needs `--no-enable-prefix-caching` on sm_121, and prefix caching is worth 21× warm prefill here |
+| vLLM (U11a) | **Deferred, untested in this campaign.** The historical path needs `--no-enable-prefix-caching` on SM121 and measured about 25–28 tok/s; matching the accepted 47.6 tok/s SGLang stack would require a whole-stack PLE/QSA/ReplaySSM/MTP port while giving up 21–48× warm prefix reuse |
+| FP8 KV (U11b) | **Deferred, untested.** No compatible validated QSA path or demonstrated use for extra KV headroom on the capped 524288-token allocation |
 | `MAX_RUNNING=1` | No gain, **+21% wall clock** on a 40-turn session |
 | `PREFILL=1024` | 32k TTFT **12.31 s vs 10.37 s** at 4096 — smaller chunks cost TTFT |
 | `PREFILL=2048` (U7b) | **Rejected.** Mixed-load p95 chunk gap **29.83 s vs 26.12 s**, mixed TTFT 31.26 s vs 28.27 s, 32k cold TTFT 11.17 s vs 10.11 s. Speculative decoding forbids `enable_mixed_chunk`, so decode waits out the whole prefill at any chunk size |

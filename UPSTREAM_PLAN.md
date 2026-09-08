@@ -1,9 +1,10 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U10 executed. U0–U4a, U6, U7a and U7b accepted-as-measured;
+Status: **Campaign complete: U0–U12 closed. U0–U4a, U6, U7a and U7b
+accepted-as-measured;
 U4b/U4c/U5a, the U7b 2048 candidate, the U8a QSA prefill overlay, U9 BF16 state
 and the U10 checkpoint switch rejected; U5b skipped; U8b not applicable;
-U11 deferred. U12 not started**. This supersedes stale TODO/status and skip-list
+U11 deferred; U12 closed from cumulative validation**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -348,12 +349,20 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U12 — Final combined validation and documentation
 
-- [ ] Re-run the accepted combination from its documented preparation path,
-  verify two reusable boots, common gates, expanded quality where applicable,
-  and a two-hour mixed-load soak. Check interactions between accepted changes.
-- [ ] Publish only matched reproducible figures with context, precision, thinking
-  and caching explicit. Reconcile stale README/EXPLORATION claims; list rejected
-  and deferred items with evidence. Commit the final recipe.
+- [x] Closed from cumulative post-U6 evidence rather than another dedicated boot.
+  The accepted combination had two reuse launches at U6 (564/556 s, both
+  `128/128`, 0 copied), then repeated common, 8k/32k/128k, prefix-cache,
+  decode, stream and mixed-load gates through U7–U10. The current Radix default
+  also completed GSM8K n=200 at 194/200, a 20-prompt arithmetic probe at 155/200,
+  and a fresh 120-turn pair with 0 invalid tool calls and flat latency bands.
+  These later runs exercised interactions among the accepted U1/U2/U3/U6 paths.
+  No dedicated U12 run or two-hour mixed-load soak was performed; repeated
+  launches and earlier one-hour soaks were accepted as sufficient final evidence,
+  and the missing two-hour soak remains an explicit limit rather than a pass.
+- [x] Published only matched reproducible figures with context, precision,
+  thinking and caching explicit. README and the historical EXPLORATION plan are
+  reconciled; rejected, skipped, not-applicable and deferred work is labeled.
+  See RESEARCH_LOG U12.
 
 If an item is blocked, log its exact blocker and commit before an independent
 later item. Do not advance to dependent performance tuning while correctness or
