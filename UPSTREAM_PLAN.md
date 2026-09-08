@@ -2,8 +2,8 @@
 
 Status: **U0–U10 executed. U0–U4a, U6, U7a and U7b accepted-as-measured;
 U4b/U4c/U5a, the U7b 2048 candidate, the U8a QSA prefill overlay, U9 BF16 state
-and the U10 checkpoint switch rejected; U5b skipped; U8b not applicable.
-U11–U12 not started**. This supersedes stale TODO/status and skip-list
+and the U10 checkpoint switch rejected; U5b skipped; U8b not applicable;
+U11 deferred. U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -330,18 +330,21 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U11 — Optional vLLM comparison and capacity experiments
 
-- [ ] U11a: verify ARM64 support, GB10 PLE patches, MTP graphs and effective prefix
-  caching. Use the same checkpoint and precision as SGLang where supported;
-  otherwise identify the comparison as a whole-stack bundle. Compare our 120-turn
-  and mixed-load workloads. Adapt the same detached harness and watchdog rather
-  than allowing two GPU servers. Log engine decision and commit.
-- [ ] U11b: test FP8 KV separately only with compatible QSA support. It is a
-  capacity/quality trade; require expanded quality and demonstrated useful
-  headroom. Keep BF16 default if inconclusive. Log decision and commit.
-- [ ] U11c: optional 512k only after correctness/stability gates. Verify actual
-  runtime mrope/YaRN configuration and KV plus output headroom. Stage 300k/400k/
-  near-512k tests with multiple needle depths and reasoning. Boot success is
-  insufficient. Never replace native 262k or attempt 1M. Log decision and commit.
+- [x] U11a deferred. The historical vLLM GB10 path measured about 25–28 tok/s and
+  required disabling prefix caching on SM121, while the accepted SGLang path now
+  reaches about 47.6 tok/s on the primary code workload and preserves 21–48x warm
+  prefix reuse. Porting the 51 GB PLE file backend, SM121 QSA correctness path,
+  ReplaySSM state fix, reduced draft vocabulary and matched agentic harness would
+  be a whole-stack migration without evidence of a plausible serving win.
+- [x] U11b deferred. No compatible, validated FP8-KV QSA path was established for
+  this stack, and the smaller BF16 recurrent-state experiment already showed that
+  1.1 GB of freed memory does not raise the configured 524288-token KV allocation.
+  A larger precision/quality trade is unwarranted without a concrete capacity use.
+- [x] U11c deferred. The earlier 512k boot exposed only 201984 KV tokens, fewer
+  than the native 262k recipe, while the published static-YaRN override did not
+  configure this checkpoint's sectioned mrope. It supplied neither runtime context
+  capacity nor a valid positional-scaling basis for staged 300k+ validation.
+  Native 262144 remains the only supported context. See RESEARCH_LOG U11.
 
 ### U12 — Final combined validation and documentation
 

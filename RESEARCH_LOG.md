@@ -2501,3 +2501,36 @@ as scored suites here. Nothing in this follow-up changes a default.
 
 Rollback: none; both runs were per-run environment only. Next item: U11 (not
 started).
+
+
+## U11 — Optional vLLM and capacity work deferred (2026-09-08)
+
+**Decision: defer U11a/U11b/U11c without new GPU runs.** These were optional
+branches, and the completed campaign removed the concrete reason to buy any of
+them. This is a docs-only decision; no unexecuted comparison is reported as a
+pass.
+
+- **U11a, vLLM:** the historical GB10 mmap+MTP path measured about 25–28 tok/s
+  and required `--no-enable-prefix-caching` on SM121. The accepted SGLang path
+  now measures about 47.6 tok/s on the primary thinking-off code workload and
+  preserves 21–48x prefix-warm prefill reuse. A fair vLLM test would first need
+  a whole-stack port of the 51 GB PLE file backend, SM121 sparse-decode fix,
+  ReplaySSM PLE-state commit, reduced-vocabulary draft path, MTP graphs and the
+  detached agentic harness. There is no measured signal that this migration
+  could improve the recipe.
+- **U11b, FP8 KV:** no compatible and locally validated QSA path was established
+  for this precision change. U9 also showed that freeing 1.1 GB by halving the
+  recurrent-state pool did not increase `max_total_num_tokens=524288`; the
+  configured cap binds. Taking a larger precision/quality trade without a
+  demonstrated capacity consumer would not satisfy the plan's useful-headroom
+  gate.
+- **U11c, 512k:** the August capacity experiment already booted with only 201984
+  KV tokens, below the native 262k recipe. Its attempted static-YaRN override
+  targeted a configuration shape this checkpoint does not use: the checkpoint
+  has sectioned mrope under `text_config.rope_parameters`, and effective
+  `rope_type` remained `default`. It therefore provided neither enough KV plus
+  output headroom nor a valid basis for 300k/400k/near-512k correctness tests.
+
+Defaults remain SGLang `4ccff141`, BF16 KV, native context 262144 and RadixArk
+revision `7b719225`. No server was started and no rollback was needed. Next item:
+U12 final cumulative validation and documentation.
