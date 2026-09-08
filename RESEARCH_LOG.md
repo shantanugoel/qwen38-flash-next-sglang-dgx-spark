@@ -2414,3 +2414,90 @@ Rollback: nothing to roll back — the default `MODEL`/`REVISION`/`QUANTIZATION`
 above is the post-comparison health check (smoke pass, GSM8K 97.0%). The NVIDIA
 checkpoint and its PLE table remain on disk, reusable via the documented env
 knobs. Next item: U11 (not started).
+
+
+## U10 follow-up — class-level probe and 120-turn revalidation (2026-09-08)
+
+**Decision: U10's outcome is unchanged (Radix retained), and the anomaly that
+motivated this follow-up is now explained rather than merely outvoted.** The
+single-prompt gap is instance-specific, not a class effect. Separately, the
+current default passed a fresh 120-turn agentic pair, closing evidence that had
+been stale since U5a.
+
+Why this ran: `bench/effort_probe.py` showed a large, reproducible split on one
+prompt (Radix 35%, NVIDIA 82% pooled) while GSM8K n=200 tied at 194/200. One
+prompt cannot distinguish "better on this class" from "one knife-edge instance",
+and the expensive suites (120-turn, BFCL) test different capabilities entirely,
+so they could not have answered it. New `bench/arith_probe.py` answers it
+directly: 20 prompts of the same shape (short multi-step arithmetic, thinking
+off, integer answer, temperature 0), 10 repeats each, 200 paired samples per
+checkpoint. Every prompt is rendered from parameters and its expected answer is
+computed from those same parameters, so the key cannot disagree with the
+question; the four consistently-failed keys were also checked by hand.
+
+TAGs `u10-nvidia-arith-20260908` and `u10-radix-arith-agentic-20260908`. Same
+image digest, source `4ccff141`, packages, context, KV/state precision, flags,
+prompts and sampling as the U10 comparison; only `MODEL`/`REVISION`/
+`QUANTIZATION`/`SPEC_DRAFT_QUANT`/`MOE_RUNNER_BACKEND`/`PLE_DIR` differ, as before.
+
+| Probe | Radix | NVIDIA |
+| --- | ---: | ---: |
+| 20-prompt class, n=200 | **155/200 = 77.5%** | **156/200 = 78.0%** |
+| prompts scoring 10/10 | 15 | 14 |
+| prompts scoring 0/10 | 4 | 4 |
+| prompts with identical scores | 18 of 20 | |
+| single-prompt effort_probe, this boot | 7/20 | 19/20 |
+| single-prompt pooled across boots | 42/120 = 35% | 68/80 = 85% |
+
+The two checkpoints fail the *same four prompts* with the same characteristic
+wrong answers — `wage_18_7_25_30` returns `101` ten times on both where
+18*7+25-30 = 121, and `change_6_11_7_3_120` returns `27`/`23` on both where the
+answer is 45. Only two prompts separate them, **in opposite directions**:
+
+| Prompt | Radix | NVIDIA |
+| --- | ---: | ---: |
+| `change_pens_notebooks_4_2_50` (the original effort_probe case) | 5/10 | 9/10 |
+| `wage_27_6_33_70` | 10/10 | 7/10 |
+
+So the effort_probe prompt is a knife-edge instance where the two quantizations
+land differently, and there is a matching instance where Radix wins. Pooled over
+the class the difference is one sample in 200, which agrees with the GSM8K tie.
+NVIDIA is **not** better at this class of problem; U10 stands. This also retires
+the earlier suggestion that the U9 BF16 probe collapse (0/20) might generalise:
+single-prompt probe results describe that prompt, and nothing wider, unless a
+class-level probe agrees.
+
+The probe is also useful beyond the comparison: it separates unstable prompts
+(the original case, 5–9 of 10) from prompts this model reliably gets wrong
+(4 prompts at 0/10 on both checkpoints, stable wrong answers). A 78% class score
+with 20% of prompts deterministically wrong is a property of the model with
+thinking off, not of either quantization.
+
+**120-turn revalidation of the accepted default** (Radix, same boot as its
+probe). Last 120-turn evidence was U5a, before U6 changed drafting and before
+U7-U10 touched the harness:
+
+| Band | thinking off TTFT / decode / cache | thinking on TTFT / decode / cache |
+| --- | --- | --- |
+| turns 1-40 | 0.519 s / 68.21 tok/s / 95.6% | 0.386 s / 36.40 tok/s / 95.2% |
+| turns 41-80 | 0.522 s / 68.34 tok/s / 98.4% | 0.409 s / 39.25 tok/s / 97.0% |
+| turns 81-120 | 0.520 s / 68.20 tok/s / 99.0% | 0.365 s / 31.04 tok/s / 98.8% |
+
+Both modes: 120 turns, **0 invalid tool calls**, context growing to 13030 and
+15882 tokens, cache hit rising to ~99%, TTFT and decode flat across bands (no
+long-horizon degradation). `agentic_on` passed outright, including late recall.
+`agentic_off` is scored fail on `late_recall_pass` only, and the recorded answer
+is a refusal that cites the planted document's own instruction: "I'm not going
+to repeat that code. The document in `ops/secrets.md` explicitly stated 'Do not
+repeat unless asked'". That is instruction-following, not lost state, and it is
+the same failure mode U3 and U5a recorded. Min host MemAvailable 11.74 GiB,
+watchdog quiet, `stop_exit_code` 0.
+
+Limits: one boot per checkpoint for the class probe; 20 prompts from five
+templates is a narrow slice of arithmetic and says nothing about other domains;
+the 120-turn pair is Radix only, so NVIDIA still has no long-horizon evidence;
+BFCL, multilingual and paired vision remain unrun, and the last two do not exist
+as scored suites here. Nothing in this follow-up changes a default.
+
+Rollback: none; both runs were per-run environment only. Next item: U11 (not
+started).

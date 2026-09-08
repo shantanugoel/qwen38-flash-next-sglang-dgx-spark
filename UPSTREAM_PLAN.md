@@ -315,8 +315,18 @@ against this endpoint; never report a TB score measured on this Spark.
   discordance 2 vs 2. The one real difference is the single-prompt probe (NVIDIA
   49/60 vs Radix 35/100), which does not generalise. No speed or fit benefit, so no
   switch. Published NVIDIA scores were not reproduced or reused.
-  Not run: full 1319 GSM8K, 120-turn, BFCL, multilingual, paired vision, 190k/210k.
-  See RESEARCH_LOG U10.
+  Follow-up (TAGs `u10-nvidia-arith-20260908`, `u10-radix-arith-agentic-20260908`):
+  a 20-prompt class probe (200 paired samples each) ties at **155/200 vs 156/200**,
+  18 of 20 prompts score identically, the same 4 prompts fail on both with the same
+  wrong answers, and the only two that differ point in **opposite** directions
+  (the effort_probe case 5/10 vs 9/10; `wage_27_6_33_70` 10/10 vs 7/10). The
+  single-prompt gap is a knife-edge instance, not a class effect. The same boot
+  revalidated the accepted default over 120 turns in both modes: 0 invalid tool
+  calls, flat TTFT/decode across bands, cache hit to ~99%, `agentic_on` pass,
+  `agentic_off` failing only on a late-recall **refusal** that quotes the planted
+  document's own instruction.
+  Not run: full 1319 GSM8K, BFCL, multilingual, paired vision, 190k/210k, and any
+  120-turn evidence for the NVIDIA pack. See RESEARCH_LOG U10 and its follow-up.
 
 ### U11 — Optional vLLM comparison and capacity experiments
 

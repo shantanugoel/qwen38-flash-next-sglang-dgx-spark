@@ -161,6 +161,10 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse(validate('effort_probe', {'summary': {'n': 2}, 'results': [{'pass': True}]}))
         self.assertTrue(validate('effort_probe', {'summary': {'n': 2, 'passed': 0},
                                                   'results': [{'pass': False}, {'pass': False}]}))
+        self.assertFalse(validate('arith_probe', {'summary': {'n': 4, 'prompts': 2},
+                                                  'results': [{'pass': True}]}))
+        self.assertTrue(validate('arith_probe', {'summary': {'n': 2, 'prompts': 1},
+                                                 'results': [{'pass': False}, {'pass': True}]}))
 
     def test_process_deadline(self):
         with tempfile.TemporaryDirectory() as d:
