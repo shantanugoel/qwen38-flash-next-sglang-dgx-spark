@@ -29,7 +29,8 @@ FILLER = (
     "shift handovers, pallet counts, and weather asides. Nothing in this "
     "paragraph is the secret. "
 )
-MAPPING = {"8k": 8000, "32k": 32000, "40k": 40000}
+MAPPING = {"8k": 8000, "32k": 32000, "40k": 40000, "120k": 120000,
+           "128k": 128000, "190k": 190000, "210k": 210000}
 
 
 def approx_tokens(text: str) -> int:

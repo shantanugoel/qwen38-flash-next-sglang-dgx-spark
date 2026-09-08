@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a, U6, U7a and U7b are done; U4b/U4c/U5a and the U7b 2048 chunk candidate were rejected; U5b skipped.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a, U6, U7a, U7b and U8 are done; U4b/U4c/U5a, the U7b 2048 chunk candidate and the U8a QSA prefill overlay were rejected; U5b skipped; U8b is not applicable to this checkpoint.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -16,8 +16,9 @@ SGLang forbids mixed chunked prefill, so decode is starved for the whole
 prefill at any chunk size. The one quality case that keeps flipping
 (`effort_thinking_off`) was resent 20x at temperature 0 in a single boot and
 answered `24` 9x, `28` 7x, `25` 4x — treat any single sample of it as noise
-(`bench/effort_probe.py`). 120k–210k needles are still
-unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
+(`bench/effort_probe.py`). **128k is now measured** (U8a): cold prefill 42.0–42.2 s, prefix-warm 0.63–0.66 s,
+needle recall passing on both A/B configurations, resend speedup ~48x. 190k/210k
+are still unmeasured. See the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
 
@@ -146,6 +147,13 @@ must default to `file`; native pinned RAM OOMs.
 | `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
 | `SPECULATIVE_TOKEN_MAP` | `bench/draft_vocab/hot_tokens_64k.pt` | U6. 65536 draft token IDs. `off` / `0` restores the full draft head. |
 | `PLE_OFFLOAD_BACKEND` | `file` when the native table module exists | Native #37068 defaults to pinned host RAM; that OOMs the 48 GiB table on GB10 |
+| `MAMBA_SSM_DTYPE` | `float32` | Recurrent state precision. ReplaySSM's exact fold is bit-identical only at fp32; SGLang warns that other dtypes re-quantize the committed state at every flush |
+
+`scripts/prepare.sh` also reads `QSA_PREFILL_SELECTION=1`, which overlays
+sglang#38209 (QSA prefill selection) onto the QSA sources and makes
+`scripts/serve.sh` mount them. It is **off by default** — see U8a in
+[RESEARCH_LOG.md](RESEARCH_LOG.md) for why. Re-run `./scripts/prepare.sh`
+without it to go back.
 
 ## Client notes
 
@@ -451,6 +459,8 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | Widened TRT-LLM QSA gate (`is_sm120_supported()`) | **Rejected.** On SM121 that call is XQA, not trtllm-gen. Silent token-id-0 loops from ~120k. Retired by #36806/#36845 |
 | #36845 KDA SM121 overlay on this image | **Rejected for serving.** Isolated rel-L2 ≤ 0.0024 and CUDA-graph replay passed; a 32k needle then returned 64× `!`. Triton-only on the same stack passed |
 | #37794 NGRAM on Qwen4-Exp | **Not ported.** U2 took only the ReplaySSM PLE-commit hunk. `_prepare_ple_batch` still refuses NGRAM |
+| #38209 QSA prefill selection (U8a) | **Rejected for serving, kept opt-in** (`QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh`). Correct here — its own kernel tests pass 87/88, the one failure being U1's deliberate KDA replacement — but 32k cold TTFT 10.119 vs 10.125 s, 128k 42.00 vs 42.20 s, mixed-load p95 26.09 vs 26.20 s. The 4-stream aggregate looked +12% until per-stream medians came out identical (34.48 vs 34.35) with c=2 down 8.5% |
+| #38170 b12x NVFP4 GEMM (U8b) | **Not applicable.** All 221184 NVFP4 scale tensors in this checkpoint are routed-MoE experts; attention, shared experts, gates, MTP and `lm_head` are BF16, so the dense `mm_fp4` path this PR retargets is never called |
 
 ### Vision
 

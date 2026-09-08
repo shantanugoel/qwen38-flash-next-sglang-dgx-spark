@@ -41,6 +41,16 @@ extract "${qwen4_path}" "${QWEN4_BACKEND}"
 extract "${qsa_path}" "${QSA_BACKEND}"
 extract "${spec_utils_path}" "${SPEC_UTILS_BACKEND}"
 
+# QSA selection sources. Extracted always so U8a can patch them; mounted only
+# when the U8a prefill-selection overlay is on (build/qsa_prefill_selection.on).
+qsa_dir="$(dirname "${qsa_path}")/qsa"
+printf '%s\n' "${qsa_dir}" > "${BUILD}/path_qsa_dir.txt"
+rm -rf "${BUILD}/qsa"
+mkdir -p "${BUILD}/qsa"
+for qsa_file in kernel.py metadata.py qsa_indexer.py; do
+  extract "${qsa_dir}/${qsa_file}" "${BUILD}/qsa/${qsa_file}"
+done
+
 ple_table_path="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
   'import sglang.srt.models.qwen4_exp_ple_table as m; print(m.__file__)' | tail -1)" || ple_table_path=""
 if [[ -n "${ple_table_path}" ]]; then
@@ -57,10 +67,29 @@ python3 "${ROOT}/patches/qsa_drop_sm121_sdpa.py" "${QSA_BACKEND}"
 python3 "${ROOT}/patches/qsa_sm121_triton.py" "${QSA_BACKEND}"
 python3 "${ROOT}/patches/replayssm_ple_commit.py" "${SPEC_UTILS_BACKEND}"
 
+# U8a opt-in: sglang#38209 QSA prefill selection, applied over the U1 Triton
+# backend. QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh
+rm -f "${BUILD}/qsa_prefill_selection.on"
+if [[ "${QSA_PREFILL_SELECTION:-0}" == "1" ]]; then
+  overlay="$(mktemp -d)"
+  trap 'rm -rf "${overlay}"' EXIT
+  mkdir -p "${overlay}/python/sglang/srt/layers/attention/qsa"
+  cp "${QSA_BACKEND}" "${overlay}/python/sglang/srt/layers/attention/qwen_sparse_attn_backend.py"
+  cp "${BUILD}"/qsa/*.py "${overlay}/python/sglang/srt/layers/attention/qsa/"
+  git -C "${overlay}" apply -p1 "${ROOT}/patches/qsa_prefill_selection.diff"
+  cp "${overlay}/python/sglang/srt/layers/attention/qwen_sparse_attn_backend.py" "${QSA_BACKEND}"
+  cp "${overlay}"/python/sglang/srt/layers/attention/qsa/*.py "${BUILD}/qsa/"
+  rm -rf "${overlay}"
+  trap - EXIT
+  touch "${BUILD}/qsa_prefill_selection.on"
+  echo "U8a overlay applied: sglang#38209 QSA prefill selection"
+fi
+
 cp "${ROOT}/patches/qsa_sm121_varlen.py" "${BUILD}/sm121_varlen.py"
 rm -rf "${BUILD}/kda_kernels"
 cp -R "${ROOT}/patches/kda_kernels" "${BUILD}/kda_kernels"
 
+python3 -m py_compile "${BUILD}"/qsa/*.py
 python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}" "${SPEC_UTILS_BACKEND}" \
   "${BUILD}/sm121_varlen.py" \
   "${BUILD}/kda_kernels/__init__.py" \
@@ -94,6 +123,12 @@ assert "_linearize_chain" not in spec, "NGRAM linearize leaked into spec_utils"
 assert "Qwen4 PLE does not support NGRAM speculation" in qwen4, (
     "NGRAM guard must stay; U2 does not port #37794 NGRAM")
 assert Path("${BUILD}/sm121_varlen.py").is_file()
+overlay_on = Path("${BUILD}/qsa_prefill_selection.on").is_file()
+kernel = Path("${BUILD}/qsa/kernel.py").read_text()
+assert overlay_on == ("QSA_PREFILL_ALL_VISIBLE_MAX_BATCH" in kernel), (
+    "U8a overlay marker and qsa/kernel.py disagree")
+assert overlay_on == ("prefill_all_visible" in qsa), (
+    "U8a overlay marker and the QSA backend disagree")
 assert Path("${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py").is_file()
 if native.is_file():
     table = native.read_text()

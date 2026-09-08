@@ -23,6 +23,16 @@ UIDGID="$(docker_user)"
 extra_gpu_groups
 NAME="${CONTAINER}-qsa-kernel"
 
+# U8a overlay (sglang#38209): the patched backend imports from the patched
+# qsa/ modules, so this isolated check must mount them too.
+QSA_OVERLAY=()
+if [[ -f "${BUILD}/qsa_prefill_selection.on" ]]; then
+  QSA_DIR_IN_IMAGE="$(cat "${BUILD}/path_qsa_dir.txt")"
+  for qsa_file in kernel.py metadata.py qsa_indexer.py; do
+    QSA_OVERLAY+=(-v "${BUILD}/qsa/${qsa_file}:${QSA_DIR_IN_IMAGE}/${qsa_file}:ro")
+  done
+fi
+
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 docker run --rm --name "${NAME}" \
   --user "${UIDGID}" \
@@ -35,6 +45,7 @@ docker run --rm --name "${NAME}" \
   -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro" \
   -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro" \
   -v "${BUILD}/kda_kernels:${KDA_IN_IMAGE}:ro" \
+  "${QSA_OVERLAY[@]+"${QSA_OVERLAY[@]}"}" \
   -v "${ROOT}/bench/qsa_sm121.py:/tmp/qsa_sm121.py:ro" \
   --entrypoint python3 \
   "${IMAGE}" \

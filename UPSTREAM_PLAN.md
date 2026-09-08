@@ -246,16 +246,32 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U8 — QSA prefill and relevant GEMM optimization
 
-- [ ] U8a: recheck [#38209](https://github.com/sgl-project/sglang/pull/38209) and
-  underlying indexer correctness reviews. Isolate it and test 8k/32k/128k,
-  cached suffixes and concurrent requests. GB200 results are not GB10 forecasts.
-  Log accept/reject/defer and commit.
-- [ ] U8b: inspect whether [b12x #38170](https://github.com/sgl-project/sglang/pull/38170)
-  reaches hot quantized linear layers in our checkpoint; BF16 lm_head and routed
-  MoE may not use this path. If relevant, check CUDA/FlashInfer compatibility,
-  tensor parity and end-to-end speed. Otherwise defer with evidence. Do not
-  independently upgrade Torch/FlashInfer merely because a release exists;
-  evaluate a compatible pinned engine bundle. Log decision and commit.
+- [x] U8a: **rejected for serving; kept as an opt-in overlay.** PR was open (not
+  merged) at execution time, head `7a4343c5`, base `qwen4-main-squashed`
+  `9b2aee22`, and carries **no reviews or issue comments**, so there were no
+  indexer correctness reviews to read. Applies cleanly over the U1 Triton
+  backend; the PR's own kernel tests pass 87/88 here, the single failure being
+  the pre-existing bundled-KDA resolver assertion U1 replaced (fails identically
+  without the overlay). Matched A/B, TAGs `u8a-qsa-prefill-38209-20260908` and
+  `u8a-baseline-20260908`: 32k cold TTFT 10.119 vs 10.125 s, 128k 42.002 vs
+  42.196 s, 8k PLE-warm 2.683 vs 2.689 s, mixed p95 26.091 vs 26.201 s, decode
+  and boot flat. Only the 4-stream aggregate moved (114.06 vs 101.50), and
+  per-stream medians are identical (34.48 vs 34.35) with c=2 moving -8.5% the
+  other way, so it is wall-clock overlap noise, not a win. Cached suffixes
+  (prefix-warm resends) and concurrent 1/2/4 streams were both covered. First
+  128k prefill/needle numbers on this box came out of this item. Enable with
+  `QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh`; default is off.
+  See RESEARCH_LOG U8a.
+- [x] U8b: **deferred, not applicable to this checkpoint; no flag changed.**
+  Radix `7b719225` has 221184 NVFP4 scale tensors and every one is under
+  `*.mlp.experts.*` (plus one PLE tensor); `quantization_config.ignore` excludes
+  attention, shared experts, gates, MTP and `lm_head`. #38170 only changes which
+  FlashInfer `mm_fp4` backend a quantized **dense linear** uses, and routed MoE
+  branches on `get_moe_runner_backend()` instead, so b12x cannot reach a hot
+  path here. FlashInfer 0.6.17 does accept `backend="b12x"`, and the image's
+  enum lacks the member, so using it would need the PR's hunks — not worth a
+  boot for a path with no callers. The NVIDIA checkpoint audited for U10 has the
+  same shape. Torch/FlashInfer were not upgraded. See RESEARCH_LOG U8b.
 
 ### U9 — Optional BF16 recurrent state
 

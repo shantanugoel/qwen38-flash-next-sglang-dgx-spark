@@ -34,6 +34,8 @@ CUDA_GRAPH_MAX_BS="${CUDA_GRAPH_MAX_BS:-}"
 CUDA_GRAPH_BS="${CUDA_GRAPH_BS:-}"
 MAMBA_STRATEGY="${MAMBA_STRATEGY:-extra_buffer}"
 PAGE_SIZE="${PAGE_SIZE:-64}"
+# U9 knob: recurrent (SSM) state dtype. Accepted default stays float32.
+MAMBA_SSM_DTYPE="${MAMBA_SSM_DTYPE:-float32}"
 # Extra raw sglang flags, word-split on purpose: EXTRA_ARGS="--strip-thinking-cache"
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
 
@@ -114,6 +116,23 @@ if [[ -n "${TOKEN_MAP_HOST}" ]]; then
     SPEC_ARGS+=(--speculative-token-map /speculative-token-map.pt)
   fi
 fi
+# U8a overlay (sglang#38209): mount the patched QSA selection sources only when
+# prepare.sh applied it. The accepted baseline mounts nothing extra here.
+if [[ -f "${BUILD}/qsa_prefill_selection.on" ]]; then
+  [[ -f "${BUILD}/path_qsa_dir.txt" ]] || {
+    echo "U8a overlay is on but path_qsa_dir.txt is missing. rerun prepare.sh" >&2
+    exit 1
+  }
+  QSA_DIR_IN_IMAGE="$(cat "${BUILD}/path_qsa_dir.txt")"
+  for qsa_file in kernel.py metadata.py qsa_indexer.py; do
+    [[ -f "${BUILD}/qsa/${qsa_file}" ]] || {
+      echo "U8a overlay is on but ${BUILD}/qsa/${qsa_file} is missing" >&2
+      exit 1
+    }
+    MOUNTS+=(-v "${BUILD}/qsa/${qsa_file}:${QSA_DIR_IN_IMAGE}/${qsa_file}:ro")
+  done
+fi
+
 if [[ -f "${BUILD}/path_ple_table.txt" && -f "${PLE_TABLE_BACKEND}" ]]; then
   MOUNTS+=(-v "${PLE_TABLE_BACKEND}:$(cat "${BUILD}/path_ple_table.txt"):ro")
 fi
@@ -167,7 +186,7 @@ docker run -d --name "${CONTAINER}" --init \
     --mamba-radix-cache-strategy "${MAMBA_STRATEGY:-extra_buffer}" \
     --mamba-track-interval "${MAMBA_TRACK_INTERVAL:-64}" \
     --max-mamba-cache-size 20 \
-    --mamba-ssm-dtype float32 \
+    --mamba-ssm-dtype "${MAMBA_SSM_DTYPE}" \
     --chunked-prefill-size "${PREFILL}" \
     --max-running-requests "${MAX_RUNNING}" \
     --max-total-tokens "${MAX_TOTAL}" \

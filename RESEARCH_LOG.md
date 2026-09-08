@@ -2034,3 +2034,160 @@ was rerun for this item.
 
 Rollback: none needed. `PREFILL` default was never changed from 4096 and the
 2048 run's flags were per-run environment only. Next item: U8a.
+
+
+## U8a — sglang#38209 QSA prefill selection (2026-09-08)
+
+**Decision: rejected for serving.** The overlay is correct on this box and
+costs nothing, but it does not improve the metric it exists to improve. The
+patch stays in-tree as an opt-in overlay (`QSA_PREFILL_SELECTION=1
+./scripts/prepare.sh`), off by default. Accepted serving configuration is
+unchanged and was restored and re-measured.
+
+Upstream state at execution time (rechecked, not taken from the September 7
+audit): [#38209](https://github.com/sgl-project/sglang/pull/38209)
+"[Qwen3.8-Flash-Next] Streamline QSA prefill selection", **open, not merged**,
+`mergeable_state` unstable, head `sghhhh:perf/qsa-prefill-selection`
+`7a4343c5ed21eeedb48bad9e54032a3d4e674e62`, base `sgl-project:qwen4-main-squashed`
+`9b2aee22836b2bfe620bf83861919870d6692660`, +664/-49 over 6 files, created
+2026-09-06. **No reviews and no issue comments exist** (`38209-reviews.json`,
+`issues-38209-comments.json` are empty), so the plan's "underlying indexer
+correctness reviews" could not be read; there are none. Its published numbers
+are 4x GB200 TP4/EP4 (8K/1K TTFT -19.40%, throughput +17.22% at concurrency
+256) and are not a GB10 forecast.
+
+Contents (all four python hunks applied; the two test files were applied
+separately for the kernel run): a Triton kernel that packs compressed indexer
+keys in one launch instead of a per-request `index_select`/`cat` chain;
+per-forward preparation of compressed offsets and row ranges with capacity
+scratch reused across QSA layers; removal of the per-layer
+`positions.max().item()` RoPE capacity checks; and an all-visible shortcut when
+the full sequence fits the selection budget with at most 256 requests.
+
+Applicability audit before running anything:
+
+- The diff applies cleanly (`git apply --check`) both to the pinned image's
+  sources and on top of our U1-patched `qwen_sparse_attn_backend.py`; it touches
+  the indexer/metadata/kernel path, not `_resolve_flash_attn_varlen_func`, so it
+  composes with the Triton SM121 route rather than replacing it.
+- The all-visible shortcut is inert for our long prompts: `indexer_budget` is
+  2048 in this checkpoint, and the guard uses the full sequence length, so only
+  sequences of at most 2048 tokens take it.
+- The deleted RoPE capacity checks rely on `ModelRunner` pre-reserving the cache.
+  Verified in the pinned image: `model_runner.py` calls
+  `reserve_rope_cache_for_long_sequences`, which expands every child with
+  `_ensure_cos_sin_cache_length` to `context_length + steps*draft*safety + margin`.
+  Long-context prefill is therefore the test that matters, which is why 128k
+  was added to this item's prefill and needle suites.
+
+Kernel tests (`scripts/test_qsa_prefill_selection.sh`, one short GPU container,
+no model load, patched sources mounted over the image): **87 passed, 1 failed**.
+The failure is `test_qsa.py::test_qsa_sm121_resolves_kda_varlen_kernel`, which
+asserts the bundled KDA varlen kernel resolves on SM121 — exactly what U1
+replaced with the #36845 Triton kernel. It fails identically on the pre-overlay
+build (verified in a separate container with the pre-overlay backend mounted),
+so it is a pre-existing consequence of an accepted decision, not a #38209
+regression. The PR's own new tests (fragmented-page gathers, incomplete
+compression groups, short-context suffixes, scratch reuse, host-readback
+regressions, dispatch boundaries) all pass here.
+
+Matched serving A/B, one variable (the overlay), same image digest, revision,
+PLE identity, flags, prompts, sampling, thinking modes and suite set:
+
+    TAG=u8a-qsa-prefill-38209-20260908 (overlay) and TAG=u8a-baseline-20260908
+    PROFILE=u3 PREFILL=4096 SIZES=8k,32k,128k PREFILL_BENCH=1 N=3 STREAMS=1 \
+      MIXEDLOAD=1 EFFORT_PROBE=1 EFFORT_PROBE_N=20 \
+      ONLY=smoke,prefill,quality,effort_probe,decode,streams,mixedload,longctx
+
+Predeclared primary metric: median cold prefill TTFT at 32k, >=5% required.
+
+| Metric | baseline | #38209 | delta |
+| --- | ---: | ---: | ---: |
+| 32k cold TTFT s | 10.125 | 10.119 | -0.1% |
+| 128k cold TTFT s | 42.196 | 42.002 | -0.5% |
+| 8k PLE-warm TTFT s | 2.689 | 2.683 | -0.2% |
+| 32k prefix-warm TTFT s | 0.315 | 0.322 | +2.2% |
+| 128k prefix-warm TTFT s | 0.656 | 0.625 | -4.7% |
+| Mixed p95 chunk gap s | 26.201 | 26.091 | -0.4% |
+| Mixed prefill TTFT s | 28.429 | 28.291 | -0.5% |
+| Decode off code / prose tok/s | 46.73 / 22.40 | 46.60 / 23.01 | flat |
+| Decode on code / prose tok/s | 38.78 / 25.42 | 40.74 / 25.03 | flat |
+| Streams c=1 / 2 / 4 aggregate tok/s | 47.01 / 86.58 / 101.50 | 48.69 / 79.26 / 114.06 | +3.6 / **-8.5** / **+12.4**% |
+| Streams c=4 median per-stream tok/s | 34.35 | 34.48 | +0.4% |
+| Boot s | 569.54 | 568.61 | flat |
+| Min MemAvailable / MemFree GiB | 10.33 / 0.96 | 10.23 / 1.01 | flat |
+| Quality | 11/12 (`28`) | 11/12 (`25`) | same unstable case |
+| effort_probe 20x | 6/20 (`28`x10, `24`x6, `25`x4) | 6/20 (`28`x7, `25`x7, `24`x6) | same |
+| Needles 8k/32k/128k, prefill 12/12 | pass | pass | — |
+
+The primary metric did not move at any size, and neither did mixed load or
+decode. The only positive is the 4-stream aggregate, and it does not survive
+inspection: median per-stream throughput at c=4 is identical (34.35 vs 34.48
+tok/s) with near-identical token counts (558/567/548 vs 547/525/766), so the
+aggregate difference is batch wall-clock overlap (5.40/5.59/5.42 s vs
+4.54/4.60/6.82 s), one overlay repeat is a 6.82 s outlier, and c=2 moves the
+other way by 8.5%. Under the campaign's own rule — consistent direction across
+repeats and a second launch, no unexplained regression elsewhere — that is
+inconclusive, and an inconclusive result does not change a default.
+
+What this run does establish, and what it does not:
+
+- First 128k measurements on this box in this campaign: cold prefill 42.0–42.2 s,
+  prefix-warm 0.63–0.66 s, needle recall pass on both configurations, and the
+  128k longctx resend speedup 48.2–48.5x. Memory margin held (min MemAvailable
+  10.2 GiB, MemFree ~1.0 GiB, swap 0, watchdog quiet).
+- The overlay is not incorrect here: 8k/32k/128k needles, tools, executed code,
+  vision, both thinking modes and mixed-load needles all pass with it on.
+- It does **not** establish equivalence. There was no 120-turn agentic run, no
+  GSM8K, no 190k/210k, and three repeats cannot detect small quality effects.
+  A future engine bundle that merges #38209 upstream would need its own gate.
+- The 8k `cold_prefix` sample in the overlay run (10.152 s vs 3.473 s baseline)
+  is a page-cache artifact: a paused 133 GB U10 download had evicted PLE pages
+  before that run. The immediately following PLE-warm repeats were 2.66/2.71 s,
+  and the metric is annotated rather than compared. Downloads are now stopped
+  during measurement.
+
+Rollback: `./scripts/prepare.sh` without `QSA_PREFILL_SELECTION`. Verified: the
+marker is gone and `build/qwen_sparse_attn_backend.py` is byte-identical to the
+pre-overlay copy kept at `results/u8a-build-before-overlay/`. The baseline run
+above *is* the post-rollback health check (smoke, prefill 12/12, needles,
+mixed load, decode all as before). Next item: U8b.
+
+
+## U8b — FlashInfer b12x NVFP4 GEMM (sglang#38170) (2026-09-08)
+
+**Decision: deferred as not applicable to this checkpoint. No serving run was
+made and no flag changed.** `--fp4-gemm-backend` stays `flashinfer_cutlass`.
+
+[#38170](https://github.com/sgl-project/sglang/pull/38170) ("Select FlashInfer
+b12x NVFP4 GEMM by default on SM120") was open, not merged, at execution time:
+head `fp4-b12x-sm120`, base `main`, created 2026-09-06, +132/-1 across five
+files. It adds `Fp4GemmRunnerBackend.FLASHINFER_B12X`, resolves `auto` to it on
+compute capability 12.x, adds the CLI choice, and keeps b12x inside the
+FlashInfer autotune gate. It changes *which FlashInfer `mm_fp4` backend a
+quantized dense linear uses*; it does not touch MoE dispatch or the weight path.
+
+Why it cannot reach a hot path here, checked against the actual artifacts
+rather than the PR's SM120 benchmark:
+
+| Check | Evidence |
+| --- | --- |
+| What the checkpoint quantizes | `model.safetensors.index.json` of Radix `7b719225242aacd3dbd3f9407468c2ee9a9d2594` has 221184 NVFP4 scale tensors, **all** under `*.mlp.experts.*`, plus a single PLE tensor. No other scales exist. |
+| What it excludes | `config.json` `quantization_config.ignore` lists `model.embed_tokens`, `mtp.*`, `model.mtp.*`, `*.self_attn.*`, `*.linear_attn.*`, `*.mlp.gate*`. Attention projections, shared experts, gates, MTP and `lm_head` are BF16. |
+| Who consumes the FP4 GEMM backend | In the pinned image, `get_fp4_gemm_runner_backend()` is read by `modelopt_quant.cutlass_fp4_gemm` (the dense `mm_fp4` linear path) and by marlin/trtllm special cases. The routed-MoE methods branch on `get_moe_runner_backend()` (`--moe-runner-backend`, `flashinfer_cutlass` here), a different setting this PR does not touch. |
+| FlashInfer support | 0.6.17 in this image accepts `backend="b12x"` for `mm_fp4` and exposes `B12xMoEWrapper`/`b12x_fused_moe`; the image's `Fp4GemmRunnerBackend` enum has no `flashinfer_b12x` member, so using it would require the PR's `fp4_utils.py` and CLI-choice hunks. |
+
+With no NVFP4 dense linear in the model, `apply_fp4_linear`/`mm_fp4` is not on
+the serving path, so switching its backend cannot change our throughput. The
+NVIDIA checkpoint audited for U10 is the same shape (`quant_algo`
+`MIXED_PRECISION`, `quantized_layers` limited to `*.mlp.experts` plus a PLE
+n-gram embedding), so this conclusion carries over to that checkpoint.
+
+Limits: this is a source and checkpoint audit, not a measurement. It does not
+claim b12x is slower, and it says nothing about `--moe-runner-backend`
+alternatives for the routed experts, which remain unexamined in this campaign.
+The PR is unmerged; if a later engine bundle routes routed-MoE FP4 through
+`mm_fp4`, this item should be reopened. Torch/FlashInfer were not upgraded for
+this item, per the plan's instruction not to chase releases independently.
+
+Rollback: nothing to roll back. Next item: U9.
