@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a accepted; U4b/U4c/U5a rejected; U5b skipped; U6–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a accepted; U4b/U4c/U5a rejected; U5b skipped; U6 audit done; U6 64k experiment and U7–U12 not finished**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -194,10 +194,10 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U6 — Reduced-vocabulary MTP drafting
 
-- [ ] Audit NEXTN verification and token-ID mapping before porting the concept
+- [x] Audit NEXTN verification and token-ID mapping before porting the concept
   from [MiaAI](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark).
   Keep target vocabulary/sampling unchanged; excluded draft tokens must remain
-  possible through target verification.
+  possible through target verification. See RESEARCH_LOG U6 audit.
 - [ ] Build the subset from a separate code/multilingual/tool corpus and evaluate
   held-out prompts. Begin at 64k rows; each further size is a separate experiment.
   Measure traffic, extra resident slice memory, acceptance, steady decode,

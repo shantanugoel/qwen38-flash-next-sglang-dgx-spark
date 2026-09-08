@@ -1,0 +1,49 @@
+EN: Speculative decoding drafts several tokens and the target model verifies them in one step. A reduced draft vocabulary only changes which ids the drafter can propose; the verifier still sees the full softmax. Linear-attention layers keep a recurrent state per request. Prefix caching should make a repeated 32k prompt much cheaper on the second send.
+
+ES: La prescripcion de una sancion administrativa no es lo mismo que su ejecucion. El plazo, la interrupcion y la caducidad cambian el resultado. Un agente que mezcla herramientas y prosa tiene que recordar hechos plantados muchas turnos atras, no solo el ultimo JSON.
+
+ZH: 门控差分网络把逐层递推状态压成固定大小，不随上下文线性增长。稀疏注意力仍按块检索，量化键会改变被选中的块。投机解码的草稿词表缩小之后，目标模型仍按完整词表校验，被排除的 token 仍可通过拒绝采样路径出现。工具调用标签、思考块和视觉占位符必须留在草稿集合里，否则每条特殊符号都会被拒绝。
+
+JA: 投機的デコーディングでは草稿ヘッドが次トークンを予測し、本体がまとめて検証する。語彙を減らしても出力分布は本体側で決まる。長文のスペイン語説明や漢字の多い技術文書では受理率が下がることがある。ツール呼び出しの開始・終了タグを草稿集合から外すと、エージェント応答が遅く見える。
+
+AR: فك التشفير التخميني يقترح عدة رموز ثم يتحقق النموذج الهدف منها دفعة واحدة. تقليص مفردات المسودة لا يغيّر عيّنة الهدف. يجب أن تبقى رموز الاستدعاء الخاصة والأرقام العربية-الهندية والتواريخ الهجرية قابلة للاقتراح وإلا تُرفض المسودة عند كل أداة.
+
+HI: सट्टेबाजी डिकोडिंग में ड्राफ्ट हेड अगले टोकन सुझाता है और लक्ष्य मॉडल उन्हें एक साथ जाँचता है। छोटा ड्राफ्ट शब्दसंग्रह लक्ष्य के नमूने को नहीं बदलता। देवनागरी में तकनीकी गद्य पर स्वीकृति दर गिर सकती है। टूल कॉल टैग ड्राफ्ट सेट में रहने चाहिए।
+
+FR: La verification cible conserve le vocabulaire complet. Un sous-ensemble de 65536 identifiants reduit le GEMM de la tete de brouillon. Les jetons d'appel d'outil, les blocs de raisonnement et les identifiants visuels restent accessibles via le rejet. Le cache de prefixe doit toujours accelerer un second envoi.
+
+DE: Spekulatives Dekodieren aendert nicht die Zielverteilung. Eine kleinere Draft-Vokabel spart Bandbreite auf dem lm_head, erzeugt aber einen zusaetzlichen residenten Slice. Werkzeug-Tokens und Denkbloecke gehoeren in die Menge, sonst bricht jede Tool-Schleife die Akzeptanz.
+
+KO: 스펙큘레이티브 디코딩은 초안 토큰을 한 번에 검증한다. 축소 어휘는 초안 GEMM만 줄인다. 도구 호출 태그와  vis 토큰은 초안 집합에 남겨야 한다. 스페인어 산문과 한국어 기술 문서에서 수락률을 따로 본다.
+
+RU: Спекулятивное декодирование не меняет распределение цели. Урезанный словарь черновика экономит трафик lm_head и добавляет отдельный срез в памяти. Теги инструментов и блоки рассуждений должны остаться в множестве.
+
+PT: O verificador continua com o vocabulario completo. Um mapa de 64 mil linhas e um clone extra, nao uma economia de RSS. Chamadas de ferramenta em XML ainda precisam dos ids especiais.
+
+IT: La bozza ridotta non e una garanzia di velocita. Misurare accettazione, decode stabile e latenza di punta. I token speciali del template restano obbligatori.
+
+VI: Giam tu vung nhap khong duoc lam mat nhan toan. Token cong cu va khoi suy nghi phai nam trong tap. Do phu tren tap giu lai moi la bang chung.
+
+TH: การลดคลังคำของดราฟต์ไม่เปลี่ยนการสุ่มของโมเดลหลัก ต้องคงโทเคนพิเศษของเครื่องมือไว้
+
+ID: Kosakata draf yang dipotong hanya mengubah usulan. Verifikasi target tetap penuh. Tag alat wajib masuk peta.
+
+TR: Taslak sozlugunu kucultmek hedef orneklemeyi degistirmez. Arac etiketleri haritada kalmalidir.
+
+PL: Zmniejszony slownik draftu nie zmienia weryfikacji. Tokeny narzedzi musza zostac.
+
+NL: Een kleinere draft-vocabulaire is geen resident-geheugenwinst. Meet extra slice en acceptatie apart.
+
+UK: Скорочений словник чернетки не змінює цільову вибірку. Теги інструментів мають лишитися.
+
+FA: کاهش واژگان پیشنویس توزیع هدف را عوض نمیکند. توکنهای ابزار باید در مجموعه بمانند.
+
+Numbers, dates, units, and identifiers the drafter should still propose:
+0 1 2 3 7 8 9 10 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536 262144 524288
+3.14159 2.71828 6.626e-34 1.602e-19
+2026-09-08T06:24:00Z 14:30:00+09:00
+0x7b719225 0xff00aa55 deadbeef
+192.168.1.10 10.0.0.2 2001:db8::1
+sglang:spec_accept_length qwen38-flash-next-nvfp4-mtp
+RadixArk/Qwen3.8-Flash-Next-NVFP4
+<|im_start|> <|im_end|> <think> </think> <tool_call> </tool_call>

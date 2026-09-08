@@ -1,0 +1,109 @@
+Independent tool-call and structured-output corpus for draft-vocab ranking.
+These function names are not the eval weather/code smokes.
+
+<tool_call>
+search_documents
+query is hybrid attention Gated DeltaNet
+limit is 8
+filters is {"lang":"es","year":2024}
+</tool_call>
+<tool_response>
+[{"id":"doc-17","title":"Linear attention survey"}]
+</tool_response>
+<tool_call>
+get_http
+url is https://example.org/api/v2/widgets?color=red
+method is GET
+headers is {"Accept":"application/json"}
+</tool_call>
+<tool_call>
+run_sql
+database is analytics
+query is SELECT country, COUNT(*) FROM sessions WHERE ts >= '2026-01-01' GROUP BY 1 ORDER BY 2 DESC
+</tool_call>
+<tool_call>
+write_file
+path is src/lib.rs
+content is pub fn saturating_add(a: u64, b: u64) -> u64 { a.saturating_add(b) }
+</tool_call>
+<tool_call>
+git_status
+repo is /work/app
+porcelain is true
+</tool_call>
+<tool_call>
+browser_snapshot
+url is https://localhost:8443/settings
+selector is main
+</tool_call>
+<tool_call>
+translate_text
+source_lang is zh
+target_lang is fr
+text is 请把这段会议纪要压缩成三条行动项。
+</tool_call>
+<tool_call>
+calendar_create
+title is standup
+start is 2026-09-08T14:30:00+09:00
+attendees is ["ada@example.com","lin@example.com"]
+</tool_call>
+<tool_call>
+code_exec
+language is python
+stdin is 1 2 3
+source is print(sum(map(int, input().split())))
+</tool_call>
+<tool_call>
+lookup_ipv6
+addr is 2001:db8::ff00:42:8329
+</tool_call>
+
+JSON schemas the model should still be able to draft:
+
+{"name":"create_ticket","arguments":{"project":"INFRA","severity":"high","body":"disk 92% on spark-3"}}
+{"name":"patch_config","arguments":{"path":"/etc/sglang.yaml","dry_run":true}}
+{"name":"vector_search","arguments":{"collection":"papers","k":12,"query":"speculative decoding FR-Spec"}}
+{"tool":"fs_list","dir":"/var/log","glob":"*.jsonl"}
+{"tool":"metrics_query","promql":"rate(sglang_spec_accept_length[5m])"}
+
+XML-ish wrappers and fences:
+
+```json
+{"ok": true, "items": [1, 2, 3], "note": "nombres con ñ y ç"}
+```
+
+SELECT id, nombre, precio FROM productos WHERE categoria = 'herramientas' LIMIT 50;
+INSERT INTO audit(ts, actor, action) VALUES (NOW(), 'agent', 'tool_call');
+git diff --stat HEAD~3
+curl -sS -H 'Authorization: Bearer demo' https://api.github.com/repos/example/app/commits
+kubectl get pods -n serving -o wide
+docker inspect --format '{{.State.Status}}' qwen38-flash-next
+nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv
+python3 -m pytest tests/test_harness.py -q
+cargo test saturating_add -- --nocapture
+go test ./internal/mtp -count=1
+rustc --edition 2021 lib.rs
+clang -O2 -std=c17 decode.c -o decode
+npx tsc --noEmit
+sqlfluff lint models/*.sql
+prettier --check 'src/**/*.{ts,tsx}'
+eslint . --max-warnings=0
+jq '.choices[0].message.tool_calls' /tmp/resp.json
+yq e '.spec.replicas' deploy.yaml
+hexdump -C /tmp/weights.bin | head
+base64 -w0 </tmp/small.png
+sha256sum tokenizer.json vocab.json merges.txt
+tar -tzf logs.tgz | rg 'watchdog|xid'
+rsync -a --info=progress2 src/ backup/
+ssh spark 'uptime; free -h'
+systemctl --user status llama-swap
+journalctl -k -n 20 --no-pager
+printf '{"a":1,"b":[true,null]}\n'
+echo $'col1\tcol2\tcol3'
+date --iso-8601=seconds
+uuidgen
+python3 - <<'PY'
+import json
+print(json.dumps({"event":"heartbeat","ok":True}))
+PY

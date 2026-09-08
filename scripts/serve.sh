@@ -78,6 +78,19 @@ MOUNTS=(
   -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro"
   -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro"
 )
+TOKEN_MAP_HOST="${SPECULATIVE_TOKEN_MAP:-}"
+if [[ -n "${TOKEN_MAP_HOST}" ]]; then
+  [[ "${SPEC:-nextn}" != "off" ]] || {
+    echo "SPECULATIVE_TOKEN_MAP requires NEXTN (SPEC is off)" >&2
+    exit 1
+  }
+  [[ -f "${TOKEN_MAP_HOST}" ]] || {
+    echo "SPECULATIVE_TOKEN_MAP is not a file: ${TOKEN_MAP_HOST}" >&2
+    exit 1
+  }
+  MOUNTS+=(-v "${TOKEN_MAP_HOST}:/speculative-token-map.pt:ro")
+  SPEC_ARGS+=(--speculative-token-map /speculative-token-map.pt)
+fi
 if [[ -f "${BUILD}/path_ple_table.txt" && -f "${PLE_TABLE_BACKEND}" ]]; then
   MOUNTS+=(-v "${PLE_TABLE_BACKEND}:$(cat "${BUILD}/path_ple_table.txt"):ro")
 fi

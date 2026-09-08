@@ -1,0 +1,107 @@
+# Independent code snippets for draft-vocab ranking. Not the eval merge-two-lists prompt.
+
+def rolling_hash(s: str, base: int = 257, mod: int = 1_000_000_007) -> list[int]:
+    h, p, out = 0, 1, []
+    for ch in s:
+        h = (h * base + ord(ch)) % mod
+        out.append(h)
+        p = (p * base) % mod
+    return out
+
+class Fenwick:
+    def __init__(self, n: int):
+        self.bit = [0] * (n + 1)
+    def add(self, i: int, delta: int) -> None:
+        i += 1
+        while i < len(self.bit):
+            self.bit[i] += delta
+            i += i & -i
+    def prefix(self, i: int) -> int:
+        i += 1
+        s = 0
+        while i:
+            s += self.bit[i]
+            i -= i & -i
+        return s
+
+async def fetch_all(urls, client):
+    return await asyncio.gather(*[client.get(u) for u in urls])
+
+from dataclasses import dataclass
+@dataclass(frozen=True, slots=True)
+class Span:
+    start: int
+    end: int
+    def __contains__(self, x: int) -> bool:
+        return self.start <= x < self.end
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+export async function* ndjson(stream) {
+  let buf = "";
+  for await (const chunk of stream) {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.trim()) yield JSON.parse(line);
+    }
+  }
+}
+
+use std::collections::BTreeMap;
+pub fn histogram(xs: &[i64]) -> BTreeMap<i64, usize> {
+    let mut m = BTreeMap::new();
+    for &x in xs { *m.entry(x).or_insert(0) += 1; }
+    m
+}
+
+package mtp
+func acceptLen(draft, target []int32) int {
+    n := 0
+    for i := range draft {
+        if i >= len(target) || draft[i] != target[i] { break }
+        n++
+    }
+    return n
+}
+
+#include <stdint.h>
+uint64_t mix(uint64_t x) {
+    x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27; x *= 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+CREATE TABLE kv_pool (
+  seq_id BIGINT NOT NULL,
+  page_id INT NOT NULL,
+  tokens INT NOT NULL,
+  PRIMARY KEY (seq_id, page_id)
+);
+CREATE INDEX kv_pool_tokens ON kv_pool (tokens DESC);
+
+type Widget = { id: string; qty: number; tags?: string[] };
+const total = (xs: Widget[]) => xs.reduce((a, w) => a + w.qty, 0);
+
+fn main() {
+    let mut s = String::from("hola");
+    s.push_str(" mundo");
+    println!("{s}");
+}
+
+def kahan(xs):
+    total = c = 0.0
+    for x in xs:
+        y = x - c
+        t = total + y
+        c = (t - total) - y
+        total = t
+    return total

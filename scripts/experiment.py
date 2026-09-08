@@ -163,6 +163,7 @@ SAFE_FLAGS = {'model_path', 'revision', 'served_model_name', 'context_length',
               'max_mamba_cache_size', 'mamba_ssm_dtype', 'page_size', 'quantization',
               'speculative_algorithm', 'speculative_num_steps', 'speculative_eagle_topk',
               'speculative_num_draft_tokens', 'speculative_draft_model_quantization',
+              'speculative_token_map',
               'prefill_attention_backend', 'decode_attention_backend', 'enable_gdn_replayssm_spec',
               'disable_radix_cache', 'disable_prefill_cuda_graph', 'cuda_graph_max_bs_decode',
               'reasoning_parser', 'tool_call_parser', 'preferred_sampling_params',
@@ -287,8 +288,18 @@ def run(out, env):
                 'Triton SM121 QSA', 'committing PLE n-gram',
                 'file-backed mmap', 'reusing recipe backing file',
                 'WILLNEED prefetch', 'RSS trimmer', 'resident set capped',
-                'trimmed resident')))
+                'trimmed resident', 'speculative-token-map')))
         (out / 'boot-facts.txt').write_text(facts)
+        token_map = env.get('SPECULATIVE_TOKEN_MAP', '').strip()
+        if token_map:
+            flags = json.loads((out / 'effective.json').read_text()).get('launch_flags', {})
+            if flags.get('speculative_token_map') != '/speculative-token-map.pt':
+                raise RuntimeError('SPECULATIVE_TOKEN_MAP was set but launch flags omitted it')
+            report = Path(token_map).with_suffix('.report.json')
+            if not report.is_file():
+                report = Path(token_map).with_name(Path(token_map).stem + '.report.json')
+            if report.is_file():
+                shutil.copy2(report, out / 'draft_vocab.report.json')
         if env.get('QSA_KERNEL_CHECK') == '1':
             if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
                 raise RuntimeError('KDA SM121 kernel selected; Triton-only serving is required')

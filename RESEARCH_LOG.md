@@ -1735,3 +1735,39 @@ is already 524288, twice native context, and is the binder. Raising it would be
 a separate memory-risk experiment with no demonstrated headroom. Native 262144
 context unchanged.
 
+## U6 audit — NEXTN token-ID mapping (2026-09-08)
+
+**Decision: native hook is usable; do not slice the target sampler.** SGLang
+NEXTN is a reserved alias for EAGLE (`spec_registry._RESERVED_ALIASES`). Image
+`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`
+(`4ccff141`). Qwen4Exp MTP (`qwen4_exp_mtp.py`) has its own `ParallelLMHead`
+over `config.vocab_size` (248320). The EAGLE v2 worker then calls
+`set_embed_and_head` with the **target** embed/head, so drafting already shares
+the target lm_head rather than keeping the MTP `model.shared_head.head` tensor.
+
+`--speculative-token-map` loads a 1-D int64 `torch.load` list (`spec_utils.load_token_map`).
+For non-EAGLE3 it clones the target head, keeps `head.data[hot_token_id]`, and
+after each draft argmax remaps with `topk_index = hot_token_id[topk_index]`.
+Target verify still runs the full lm_head. Tokens outside the subset remain
+reachable when a draft is rejected. `--speculative-use-rejection-sampling` is
+the only path that currently refuses a reduced draft vocab (FIXME in
+`eagle_worker_v2.py`); this recipe does not set that flag. The CUDA topk=1
+chain buffer is disabled whenever `hot_token_id` is set.
+
+MiaAI's vLLM patch slices the MTP's own 1.18 GiB BF16 head. Here the equivalent
+is the native token map on the already-shared target head: draft GEMM shrinks
+(248320 → 65536 rows) and the clone is **extra** RSS (~320 MiB at BF16), not a
+resident-memory saving. Do not enable rejection sampling with the map.
+
+Builder: `scripts/build_draft_vocab.py`. 64k map from independent
+code/multilingual/tool corpus plus Wikipedia random extracts (not
+quality/decode/agentic/longctx/gsm8k). Specials 33/33 including `<tool_call>`
+and `<think>`. Corpus-ranked 44301 + specials = 44334 rows; 21202 fill in id
+order. Held-out eval-file coverage 99.35% (13665 tokens). Default stays unset
+until the 64k serving experiment decides.
+
+## U6 — 64k draft vocab (pending)
+
+Not yet logged. Opt-in via `SPECULATIVE_TOKEN_MAP`.
+
+

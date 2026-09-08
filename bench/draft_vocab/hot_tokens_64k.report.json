@@ -1,0 +1,199 @@
+{
+  "snapshot": "/huggingface/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+  "sources": [
+    "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/draft_corpus/multilingual.txt",
+    "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/draft_corpus/code_snippets.txt",
+    "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/draft_corpus/tools.txt",
+    "/usr/lib/python3.12/inspect.py",
+    "/usr/lib/python3.12/py_compile.py",
+    "/usr/lib/python3.12/genericpath.py",
+    "/usr/lib/python3.12/zipapp.py",
+    "/usr/lib/python3.12/_aix_support.py",
+    "/usr/lib/python3.12/modulefinder.py",
+    "/usr/lib/python3.12/imaplib.py",
+    "/usr/lib/python3.12/antigravity.py",
+    "/usr/lib/python3.12/tty.py",
+    "..."
+  ],
+  "corpus_distinct": 44309,
+  "corpus_occurrences": 9451108,
+  "requested_size": 65536,
+  "vocab_size": 248320,
+  "n_special": 33,
+  "n_after_specials_and_corpus": 44334,
+  "n_corpus_rank_added": 44301,
+  "n_fill": 21202,
+  "n_final": 65536,
+  "filled_to_size": true,
+  "held_out_coverage": {
+    "tokens": 13665,
+    "in_map": 13576,
+    "coverage": 0.9934870106110502,
+    "missing_distinct": 31,
+    "missing_top": [
+      [
+        79420,
+        11
+      ],
+      [
+        69084,
+        8
+      ],
+      [
+        72477,
+        7
+      ],
+      [
+        73555,
+        7
+      ],
+      [
+        88943,
+        6
+      ],
+      [
+        56725,
+        6
+      ],
+      [
+        58646,
+        4
+      ],
+      [
+        67017,
+        4
+      ],
+      [
+        90593,
+        4
+      ],
+      [
+        56815,
+        3
+      ],
+      [
+        61872,
+        3
+      ],
+      [
+        91314,
+        3
+      ],
+      [
+        58655,
+        2
+      ],
+      [
+        57573,
+        2
+      ],
+      [
+        81351,
+        2
+      ],
+      [
+        55879,
+        2
+      ],
+      [
+        57014,
+        1
+      ],
+      [
+        55918,
+        1
+      ],
+      [
+        73804,
+        1
+      ],
+      [
+        81294,
+        1
+      ]
+    ],
+    "files": [
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/soak.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/prefill.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/decode.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/gsm8k.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/agentic.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/growsoak.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/ple_spec.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/quality.py",
+      "/home/shantanu/experiments/qwen38-flash-next-sglang-dgx-spark/bench/longctx.py"
+    ]
+  },
+  "special_ids": [
+    248044,
+    248045,
+    248046,
+    248047,
+    248048,
+    248049,
+    248050,
+    248051,
+    248052,
+    248053,
+    248054,
+    248055,
+    248056,
+    248057,
+    248058,
+    248059,
+    248060,
+    248061,
+    248062,
+    248063,
+    248064,
+    248065,
+    248066,
+    248067,
+    248068,
+    248069,
+    248070,
+    248071,
+    248072,
+    248073,
+    248074,
+    248075,
+    248076
+  ],
+  "first_16": [
+    248044,
+    248045,
+    248046,
+    248047,
+    248048,
+    248049,
+    248050,
+    248051,
+    248052,
+    248053,
+    248054,
+    248055,
+    248056,
+    248057,
+    248058,
+    248059
+  ],
+  "last_16": [
+    50326,
+    50328,
+    50329,
+    50332,
+    50334,
+    50335,
+    50336,
+    50337,
+    50338,
+    50343,
+    50344,
+    50347,
+    50349,
+    50351,
+    50353,
+    50354
+  ],
+  "source_count": 2051
+}
