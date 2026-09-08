@@ -3,7 +3,7 @@
 **Current campaign:** [September upstream validation plan](UPSTREAM_PLAN.md).
 The August plan below is historical; stale TODO/status and skip-list entries do
 not authorize rerunning completed experiments. See RESEARCH_LOG.md for outcomes.
-U0–U4a are accepted; U4b/U4c were rejected (prefetch and RSS trim stay off). U5 and later campaign items have not started.
+U0–U4a are accepted; U4b/U4c/U5a were rejected; U5b was skipped. U6 and later campaign items have not started.
 
 Goal: keep a **single DGX Spark / GB10** recipe, stay on **Radix NVFP4**, and raise
 quality then speed for long-horizon agentic work (search/scrape/facts/tools/code/prose,

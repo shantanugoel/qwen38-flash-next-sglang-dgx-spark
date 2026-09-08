@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a accepted; U4b/U4c rejected; U5–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a accepted; U4b/U4c/U5a rejected; U5b skipped; U6–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -14,8 +14,9 @@ U4b (prefill `posix_fadvise(WILLNEED)`) was rejected the same day: 32k prefill
 unchanged vs prefetch-off; recipe default stays `SGLANG_QWEN4_PLE_FILE_PREFETCH=0`.
 U4c (8 GiB RSS trimmer) was rejected the same day: mapping RSS stayed ~0.4 GiB
 across a one-hour growing-context soak, so the trimmer never fired. Default stays
-`SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0` (native default is 8). Later items remain
-unexecuted.
+`SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0` (native default is 8). U5a (`--mamba-track-interval 256`) was rejected the same
+day: `max_total_num_tokens` stayed 524288. U5b skipped (MAX_TOTAL already binds).
+Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -184,13 +185,12 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U5 — Mamba tracking interval and usable KV capacity
 
-- [ ] U5a: compare track interval 64 versus 256 at identical MAX_TOTAL,
-  MAX_RUNNING and memory fraction. Validate page/draft alignment, actual Mamba
-  slot allocation, 120-turn and shared-prefix TTFT, and long-context quality.
-  More theoretical KV is not a benefit when MAX_TOTAL already binds. Commit.
-- [ ] U5b, only if warranted: change MAX_TOTAL separately with memory gates and
-  realistic long concurrent requests. Keep native context unchanged. Commit.
-  Source lead: [Spark cookbook](https://github.com/sgl-project/sglang/pull/37995).
+- [x] U5a: TAG `u5a-mamba-interval-256-20260908`. Effective `mamba_track_interval=256`,
+  `max_total_num_tokens` still 524288 (MAX_TOTAL binds). 8k/32k needles PASS.
+  120-turn 0 invalid; late recall refusals as in U3. Default stays 64.
+  Rejected. See RESEARCH_LOG U5a.
+- [x] U5b skipped: 256 did not raise allocated KV, so changing MAX_TOTAL is not
+  warranted. Native 262144 context unchanged. See RESEARCH_LOG U5b.
 
 ### U6 — Reduced-vocabulary MTP drafting
 

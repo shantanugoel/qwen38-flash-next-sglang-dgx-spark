@@ -1667,3 +1667,71 @@ claim.
   trim without a measured win.
 - 120-turn / GSM8K / 120k+ needles not re-run; this is a memory-control item.
 
+## U5a — Mamba track interval 256 (2026-09-08)
+
+**Decision: rejected.** Keep `--mamba-track-interval 64`. Interval 256 did not
+raise allocated KV: `max_total_num_tokens` stayed **524288** at the same
+MAX_TOTAL / MAX_RUNNING / mem-frac. Page size stayed 64, draft MTP 3/1/4
+unchanged. More theoretical Mamba sparsity is not a benefit when MAX_TOTAL
+already binds. Rollback is the current default (no restore boot). Track interval
+64 remains the Death-By-Tokens MTP-rewind guard used since the shipped recipe.
+
+TAG: `u5a-mamba-interval-256-20260908`.
+Command (detached): `PROFILE=u3 TAG=<tag> MAMBA_TRACK_INTERVAL=256 ONLY=smoke,quality,decode,longctx,agentic_off,agentic_on PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Image, digest, packages, checkpoint and PLE identity unchanged from U4a. Clocks
+still 208 / 3003 MHz. Watchdog did not trip. `stop_exit_code=0`. Prefetch and RSS
+trim stayed off.
+
+Boot 560.4 s, `128/128` / 0 copied. Effective `mamba_track_interval=256`,
+`max_mamba_cache_size=20`, KV 524288 tokens (6.00+6.00 GB). Triton SM121 and
+ReplaySSM PLE commit logged. `serve.sh` now takes `MAMBA_TRACK_INTERVAL` (default
+64) so this item could change one variable.
+
+### Fast + promotion gate
+
+Harness `experiment_status` is **fail** on quality 11/12 and both 120-turn late
+recalls. Those are the known greedy miss and disclosure refusals, not forgotten
+state.
+
+| Suite | Result |
+| --- | --- |
+| smoke | pass |
+| quality | 11/12; `effort_thinking_off` `25` not `24` |
+| decode | pass |
+| longctx 8k/32k | 2/2 needles PASS (`7K-QUARTZ-19`); 8k 3.32 s → 0.57 s (5.8×); 32k 10.57 s → 0.50 s (21.2×) |
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 41.19 (40.50–41.83) | 33.20 (28.65–33.63) |
+| prose ES | 21.77 (21.53–23.00) | 29.16 (24.89–32.00) |
+
+U4a was 40.29 / 31.96 code and 20.73 / 24.24 prose. Ranges overlap on the decode
+suite. Not a speed claim.
+
+| 120-turn | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 130 s | 119/120 | 0 | refusal | 58.05 / 58.13 / 58.05 tok/s |
+| thinking on | 515 s | 58/120 | 0 | refusal | 32.52 / 29.01 / 25.15 tok/s |
+
+U3 thinking-off was 172 s / 49.45 tok/s; thinking-on 497 s / 106 tools. Thinking-off
+agentic decode looks faster here, but it is one launch, TTFT is already flat at
+interval 64, and thinking-on tool frequency is the known unpredictable swing.
+Protocol requires a second launch before a performance accept. The KV allocator
+did not move, so there is no capacity reason to switch.
+
+Prefix-cache 32k resend 21.2× (U4a 20.9×). 0 invalid tool calls. End-of-run
+`spec_accept_length` 2.35 after 120-turn (not comparable to U3 soak 3.3).
+
+### Limits
+
+- One boot; no A/B/A on the agentic decode bump.
+- GSM8K / 120k+ needles not re-run.
+- Interval 256 is reachable via `MAMBA_TRACK_INTERVAL`; recipe default stays 64.
+
+## U5b — MAX_TOTAL (2026-09-08)
+
+**Decision: skipped, not warranted.** U5a did not raise allocated KV. MAX_TOTAL
+is already 524288, twice native context, and is the binder. Raising it would be
+a separate memory-risk experiment with no demonstrated headroom. Native 262144
+context unchanged.
+
