@@ -1763,11 +1763,49 @@ Builder: `scripts/build_draft_vocab.py`. 64k map from independent
 code/multilingual/tool corpus plus Wikipedia random extracts (not
 quality/decode/agentic/longctx/gsm8k). Specials 33/33 including `<tool_call>`
 and `<think>`. Corpus-ranked 44301 + specials = 44334 rows; 21202 fill in id
-order. Held-out eval-file coverage 99.35% (13665 tokens). Default stays unset
-until the 64k serving experiment decides.
+order. Held-out eval-file coverage 99.35% (13665 tokens). Default is now the 64k
+map; see the serving experiment below.
 
-## U6 — 64k draft vocab (pending)
+## U6 — 64k draft vocab (2026-09-08)
 
-Not yet logged. Opt-in via `SPECULATIVE_TOKEN_MAP`.
+**Decision: accepted.** Native `--speculative-token-map` with 65536 draft IDs is
+the serving default (`bench/draft_vocab/hot_tokens_64k.pt`). Target sampler and
+vocabulary are unchanged; excluded IDs remain reachable when a draft is rejected.
+`SPECULATIVE_TOKEN_MAP=off` restores the full draft head.
+
+TAGs: `u6-draft-vocab-64k-20260908` (full suite), confirm
+`u6-draft-vocab-64k-confirm-20260908` (QUICK quality+decode). Image `4ccff141` /
+`sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`,
+PROFILE=u3, PLE_DIR mmap reuse, prefetch 0, RSS budget 0. Map: 33 specials +
+44301 corpus-ranked + 21202 lowest-id fill. Held-out coverage 99.35%.
+
+| | U4a (last accepted) | U6 run 1 | U6 confirm |
+| --- | ---: | ---: | ---: |
+| boot s | 618 | 564 | 556 |
+| PLE | 128/128, 0 copied | 128/128, 0 copied | 128/128, 0 copied |
+| KV tokens | 524288 | 524288 | 524288 |
+| MTP load mem usage GiB | 0.60 | 0.90 | 0.43 |
+| code off median | 40.29 (38.06–40.94) | **47.59** (45.86–48.70) | **47.57** (44.32–48.74) |
+| prose off median | 20.73 (18.74–21.11) | 21.12 (19.88–23.89) | 22.13 (20.38–23.19) |
+| code on median | 31.96 (29.96–32.96) | 35.09 (34.97–42.54) | 42.02 (38.00–42.95) |
+| prose on median | 24.24 (21.11–30.09) | 25.17 (23.99–26.95) | 28.03 (27.90–29.50) |
+| quality | 12/12 | **12/12** (`effort_thinking_off=24`) | **12/12** (`24`) |
+| 32k first s | 10.52 | 10.47 | (QUICK, not rerun) |
+
+Primary metric (thinking-off code): **+18%** on both launches; the U6 ranges do
+not overlap U4a. Confirm also raised thinking-on code to 42.02. Prose-off is
+inside noise vs U4a. 120-turn run 1: 0 invalid tools, late-recall refusals as in
+U3; thinking-off decode bands 61.42 / 61.76 / 60.72 tok/s. End-of-decode
+`spec_accept_length` 3.85.
+
+The clone of `head.data[hot_token_id]` is extra RSS, not a saving — MTP
+`mem usage` moved 0.60 → 0.90 → 0.43 GiB across three boots, so do not quote a
+resident-memory delta. Bandwidth of the draft GEMM is the mechanism.
+
+Confirm started PROFILE=u3's default 3600 s soak after decode; that soak was
+stopped and is not a U6 result. Smaller maps (32k, corpus-only ~44k) were not
+measured.
+
+Rollback: `SPECULATIVE_TOKEN_MAP=off`. Next item: U7.
 
 

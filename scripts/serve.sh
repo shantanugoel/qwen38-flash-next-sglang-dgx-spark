@@ -78,18 +78,31 @@ MOUNTS=(
   -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro"
   -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro"
 )
-TOKEN_MAP_HOST="${SPECULATIVE_TOKEN_MAP:-}"
+DEFAULT_TOKEN_MAP="${ROOT}/bench/draft_vocab/hot_tokens_64k.pt"
+if [[ "${SPECULATIVE_TOKEN_MAP:-}" == "off" || "${SPECULATIVE_TOKEN_MAP:-}" == "0" ]]; then
+  TOKEN_MAP_HOST=""
+elif [[ -n "${SPECULATIVE_TOKEN_MAP:-}" ]]; then
+  TOKEN_MAP_HOST="${SPECULATIVE_TOKEN_MAP}"
+elif [[ -f "${DEFAULT_TOKEN_MAP}" ]]; then
+  TOKEN_MAP_HOST="${DEFAULT_TOKEN_MAP}"
+else
+  TOKEN_MAP_HOST=""
+fi
 if [[ -n "${TOKEN_MAP_HOST}" ]]; then
-  [[ "${SPEC:-nextn}" != "off" ]] || {
-    echo "SPECULATIVE_TOKEN_MAP requires NEXTN (SPEC is off)" >&2
-    exit 1
-  }
-  [[ -f "${TOKEN_MAP_HOST}" ]] || {
-    echo "SPECULATIVE_TOKEN_MAP is not a file: ${TOKEN_MAP_HOST}" >&2
-    exit 1
-  }
-  MOUNTS+=(-v "${TOKEN_MAP_HOST}:/speculative-token-map.pt:ro")
-  SPEC_ARGS+=(--speculative-token-map /speculative-token-map.pt)
+  if [[ "${SPEC:-nextn}" == "off" ]]; then
+    if [[ -n "${SPECULATIVE_TOKEN_MAP:-}" && "${SPECULATIVE_TOKEN_MAP}" != "off" && "${SPECULATIVE_TOKEN_MAP}" != "0" ]]; then
+      echo "SPECULATIVE_TOKEN_MAP requires NEXTN (SPEC is off)" >&2
+      exit 1
+    fi
+    TOKEN_MAP_HOST=""
+  else
+    [[ -f "${TOKEN_MAP_HOST}" ]] || {
+      echo "SPECULATIVE_TOKEN_MAP is not a file: ${TOKEN_MAP_HOST}" >&2
+      exit 1
+    }
+    MOUNTS+=(-v "${TOKEN_MAP_HOST}:/speculative-token-map.pt:ro")
+    SPEC_ARGS+=(--speculative-token-map /speculative-token-map.pt)
+  fi
 fi
 if [[ -f "${BUILD}/path_ple_table.txt" && -f "${PLE_TABLE_BACKEND}" ]]; then
   MOUNTS+=(-v "${PLE_TABLE_BACKEND}:$(cat "${BUILD}/path_ple_table.txt"):ro")

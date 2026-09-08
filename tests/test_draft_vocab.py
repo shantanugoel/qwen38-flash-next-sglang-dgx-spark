@@ -47,7 +47,9 @@ class DraftVocabTests(unittest.TestCase):
         text = (ROOT / 'scripts' / 'serve.sh').read_text()
         self.assertIn('SPECULATIVE_TOKEN_MAP', text)
         self.assertIn('/speculative-token-map.pt', text)
-        self.assertLess(text.index('MOUNTS=('), text.index('TOKEN_MAP_HOST='))
+        self.assertLess(text.index('MOUNTS=('), text.index('DEFAULT_TOKEN_MAP='))
+        self.assertIn('bench/draft_vocab/hot_tokens_64k.pt', text)
+        self.assertTrue((ROOT / 'bench' / 'draft_vocab' / 'hot_tokens_64k.pt').is_file())
 
     def test_safe_flags_include_token_map(self):
         import sys

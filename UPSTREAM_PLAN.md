@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a accepted; U4b/U4c/U5a rejected; U5b skipped; U6 audit done; U6 64k experiment and U7–U12 not finished**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a and U6 accepted; U4b/U4c/U5a rejected; U5b skipped; U7–U12 not finished**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -16,7 +16,9 @@ U4c (8 GiB RSS trimmer) was rejected the same day: mapping RSS stayed ~0.4 GiB
 across a one-hour growing-context soak, so the trimmer never fired. Default stays
 `SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0` (native default is 8). U5a (`--mamba-track-interval 256`) was rejected the same
 day: `max_total_num_tokens` stayed 524288. U5b skipped (MAX_TOTAL already binds).
-Later items remain unexecuted.
+U6 was accepted the same day: 64k NEXTN `--speculative-token-map` is now the
+serving default (thinking-off code 40.29 → 47.6 tok/s on two launches). Further
+map sizes were not measured. Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -198,12 +200,12 @@ against this endpoint; never report a TB score measured on this Spark.
   from [MiaAI](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark).
   Keep target vocabulary/sampling unchanged; excluded draft tokens must remain
   possible through target verification. See RESEARCH_LOG U6 audit.
-- [ ] Build the subset from a separate code/multilingual/tool corpus and evaluate
-  held-out prompts. Begin at 64k rows; each further size is a separate experiment.
-  Measure traffic, extra resident slice memory, acceptance, steady decode,
-  end-to-end latency and expanded quality. Do not assume bandwidth savings are
-  resident-memory savings. Revert if language/tool losses or speed fail the gate.
-- [ ] Log and commit every tested variant before moving on.
+- [x] TAG `u6-draft-vocab-64k-20260908` + confirm `u6-draft-vocab-64k-confirm-20260908`.
+  65536-row map via `--speculative-token-map`. Thinking-off code 47.59 / 47.57 vs
+  U4a 40.29 (+18%, non-overlapping). Quality 12/12 both boots. KV still 524288;
+  not a resident-memory saving. Default is now `bench/draft_vocab/hot_tokens_64k.pt`.
+  Accepted. See RESEARCH_LOG U6.
+- [x] Log and commit the 64k variant. Smaller maps were not measured.
 
 ### U7 — Graph coverage and mixed-load chunk sizing
 

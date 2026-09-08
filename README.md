@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a are accepted; U4b/U4c/U5a were rejected; U5b skipped; U6 audit done.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a and U6 are accepted; U4b/U4c/U5a were rejected; U5b skipped.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -19,7 +19,7 @@ Serve [`RadixArk/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/RadixArk/Qwen
 - **Why mmap:** a token reads 16 PLE rows (~2.5 KB). File-backed mmap
   (`--ple-offload-backend file`) keeps the table on NVMe. CUDA graphs still work because the GPU walks the host page tables. Native pinned-host allocation OOMs the 48 GiB table on GB10.
 - **QSA on sm_121:** stock SGLang gates TRT-LLM sparse decode to SM100. GB10 is SM121, so that call would fall into FA4 (does not compile) or, if the gate is widened, FlashInfer XQA (silent token-id-0 garbage). We leave the stock SM100 gate closed and route packed varlen decode through the #36845 2026-08-28 Triton kernel.
-- **MTP:** the 31 draft tensors are still BF16 inside this NVFP4 pack. `--speculative-draft-model-quantization unquant` stops the draft inheriting `modelopt_fp4`.
+- **MTP:** the 31 draft tensors are still BF16 inside this NVFP4 pack. `--speculative-draft-model-quantization unquant` stops the draft inheriting `modelopt_fp4`. Draft logits use a 65536-id `--speculative-token-map` (`bench/draft_vocab/hot_tokens_64k.pt`); the target sampler is unchanged. `SPECULATIVE_TOKEN_MAP=off` restores the full draft head.
 - **Non-root:** the container runs as your uid. Hugging Face cache and the PLE backing file stay host-owned.
 
 Prefill uses the real QSA kernels (llama.cpp GGUF cannot). We did **not** benchmark vLLM on this box — see *What was tried and rejected* for why the comparison was not run.
@@ -135,7 +135,7 @@ must default to `file`; native pinned RAM OOMs.
 | `MAMBA_STRATEGY` | `extra_buffer` | Required for `page_size > 1`; guards MTP rewind vs GDN state |
 | `PAGE_SIZE` | `64` | Ignored — compressed QSA pins it to 64 |
 | `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
-| `SPECULATIVE_TOKEN_MAP` | unset | Host path to a 1-D int64 `.pt` of draft token IDs. Off by default. U6. |
+| `SPECULATIVE_TOKEN_MAP` | `bench/draft_vocab/hot_tokens_64k.pt` | U6. 65536 draft token IDs. `off` / `0` restores the full draft head. |
 | `PLE_OFFLOAD_BACKEND` | `file` when the native table module exists | Native #37068 defaults to pinned host RAM; that OOMs the 48 GiB table on GB10 |
 
 ## Client notes
@@ -197,13 +197,47 @@ Terminal-Bench number in this repo was measured on a Spark.
 
 Single stream, `RadixArk/Qwen3.8-Flash-Next-NVFP4`, MTP 3/1/4, `trtllm_mha`
 dense decode, QSA sparse decode via #36845 Triton, `triton` prefill, CUDA graphs,
-radix cache on, **vision on**, 262k context, clock-capped GB10. U3 numbers
-(`u3-dev-4ccff14-20260908b`) are the current default. U2 PLE commit
+radix cache on, **vision on**, 262k context, clock-capped GB10. U6 numbers
+(`u6-draft-vocab-64k-20260908`, confirm `u6-draft-vocab-64k-confirm-20260908`)
+are the current default (U3 pin plus 64k NEXTN token map). U3 (`u3-dev-4ccff14-20260908b`)
+is the previous full-vocab draft head. U2 PLE commit
 (`u2-ple-commit-20260907`) is the previous serving image. U1 Triton (`u1-triton-20260907`)
 is the previous QSA-corrected baseline. August 28 tables below those blocks are
 the historical widened-gate recipe.
 
-### U3 current default (2026-09-08, SGLang `4ccff141`)
+### U6 current default (2026-09-08, 64k NEXTN token map)
+
+Same U3 engine pin. `--speculative-token-map` slices the **draft** lm_head to
+65536 rows (`bench/draft_vocab/hot_tokens_64k.pt`: 33 specials, 44301 corpus-ranked
+IDs, 21202 id-order fill). Target vocabulary and sampling are unchanged; tokens
+outside the subset still win through target verify. Held-out builder coverage
+99.35%. This is a decode-bandwidth lever, not a KV or resident-weight saving
+(MTP load `mem usage` 0.43–0.90 GiB vs U4a 0.60; KV still 524288).
+
+Two boots: `u6-draft-vocab-64k-20260908` (full suite, 564 s) and confirm
+`u6-draft-vocab-64k-confirm-20260908` (QUICK, 556 s). PLE `128/128` / 0 copied
+both times. Quality **12/12** including `effort_thinking_off=24`. 8k/32k needles
+PASS. 120-turn 0 invalid; late-recall refusals as in U3. Confirm soak was the
+PROFILE=u3 3600 s default and was stopped after decode; not a U6 measurement.
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN (run 1) | **47.59** (45.86–48.70) | 35.09 (34.97–42.54) |
+| code EN (confirm) | **47.57** (44.32–48.74) | 42.02 (38.00–42.95) |
+| prose ES (run 1) | 21.12 (19.88–23.89) | 25.17 (23.99–26.95) |
+| prose ES (confirm) | 22.13 (20.38–23.19) | 28.03 (27.90–29.50) |
+
+Versus last accepted U4a thinking-off code **40.29** (38.06–40.94): **+18%** on
+both launches, ranges do not overlap. 32k first-send 10.47 s (U4a 10.52 s).
+
+| 120-turn (run 1) | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 122 s | 119/120 | 0 | refusal | 61.42 / 61.76 / 60.72 tok/s |
+| thinking on | 346 s | 118/120 | 0 | refusal | 33.69 / 41.01 / 39.56 tok/s |
+
+`SPECULATIVE_TOKEN_MAP=off` rolls this back. Smaller maps were not measured.
+
+### U3 previous default (2026-09-08, SGLang `4ccff141`, full draft vocab)
 
 Image digest `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`
 (commit `4ccff141`, MTP token-0 router [#38290](https://github.com/sgl-project/sglang/pull/38290),
