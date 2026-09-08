@@ -277,9 +277,17 @@ def run(out, env):
                         dirs_exist_ok=True)
     # Local tag retains the exact original image without exporting multi-GB layers.
     command(['docker', 'tag', initial['image_id'], 'qwen38-u0-preserved:' + env['TAG']])
-    identity = ple_identity(env['SNAPSHOT'], env['PLE_DIR'], env['RECIPE_MODEL'], env['REVISION'])
+    # PLE_FIRST_BUILD=1 is for a checkpoint whose backing table does not exist
+    # yet. The directory is still bound to this checkpoint before the build, so
+    # a second checkpoint cannot land in the same file, and the table is sampled
+    # after the boot instead.
+    first_build = env.get('PLE_FIRST_BUILD') == '1'
+    identity = ple_identity(env['SNAPSHOT'], env['PLE_DIR'], env['RECIPE_MODEL'],
+                            env['REVISION'], require_backing=not first_build)
     bind_identity(identity, ROOT / 'results/ple-identities')
     (out / 'ple_identity.json').write_text(json.dumps(identity, indent=2))
+    if first_build and identity.get('state') == 'present':
+        raise RuntimeError('PLE_FIRST_BUILD is set but the backing file already exists')
     env['IMAGE'] = initial['image_id']  # serve cannot accidentally follow a moved tag
     env['EXPERIMENT_IMAGE_ID'] = initial['image_id']
     env['EXPERIMENT_REVISION'] = env['REVISION']
@@ -336,6 +344,13 @@ def run(out, env):
             time.sleep(5)
         result['boot_seconds'] = round(time.monotonic() - boot_start, 2)
         print('RESULT boot:', result['boot_seconds'], flush=True)
+        if first_build:
+            # The table exists now; sample it against the checkpoint and record
+            # the identity a later reuse boot will be checked against.
+            built = ple_identity(env['SNAPSHOT'], env['PLE_DIR'], env['RECIPE_MODEL'],
+                                 env['REVISION'])
+            (out / 'ple_identity_built.json').write_text(json.dumps(built, indent=2))
+            print('RESULT ple build:', built['bytes'], built['sample_sha256'], flush=True)
         effective(container, base, out)
         boot_proc = subprocess.run(['docker', 'logs', '--tail', '2000', container],
             capture_output=True, text=True, timeout=15)

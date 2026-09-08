@@ -1,7 +1,9 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a, U6, U7a and U7b accepted-as-measured; U4b/U4c/U5a and the U7b
-2048 candidate rejected; U5b skipped; U8–U12 in progress**. This supersedes stale TODO/status and skip-list
+Status: **U0–U10 executed. U0–U4a, U6, U7a and U7b accepted-as-measured;
+U4b/U4c/U5a, the U7b 2048 candidate, the U8a QSA prefill overlay, U9 BF16 state
+and the U10 checkpoint switch rejected; U5b skipped; U8b not applicable.
+U11–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -293,16 +295,28 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U10 — Optional NVIDIA checkpoint comparison
 
-- [ ] Audit the [model card](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4),
-  revision, expected disk footprint and free capacity before a detached download.
-  September 7 revision: `fc694b54fb0174e0913e6adf86691ef85a4ead47`; support merged
-  in [#38121](https://github.com/sgl-project/sglang/pull/38121).
-- [ ] Use separate checkpoint/PLE identity and correctly load its FP8 MTP experts;
-  do not blindly retain Radix's draft `unquant` setting. Hold engine, context,
-  KV/state precision, prompts and sampling fixed. Run expanded quality, promotion,
-  memory and boot checks. Retain Radix unless paired evidence supports quality
-  and an actual speed/fit benefit warrants switching. Published NVIDIA scores
-  never become local results. Log decision and commit.
+- [x] Audited before downloading: revision `fc694b54fb0174e0913e6adf86691ef85a4ead47`
+  (not gated), 11 files, 132.73 GB advertised / 124 GB on disk, 2.6 TB free after.
+  MIXED_PRECISION export: NVFP4 g16 routed experts, **128x128 block-scaled FP8 MTP**,
+  per-tensor FP8 PLE. #38121 support is already in the pinned image.
+- [x] **Radix retained.** TAGs `u10-nvidia-nvfp4-20260908` (serving A/B vs
+  `u8a-baseline-20260908`), `u10-nvidia-gsm8k-20260908` and
+  `u10-radix-gsm8k-20260908` (paired screening). Separate `PLE_DIR` and identity:
+  the NVIDIA table is the same 51200245760 bytes as Radix's, so a shared directory
+  would have mixed checkpoints; its sampled digest is identical to Radix's, matching
+  the card's claim that the PLE is copied byte-for-byte from Qwen's FP8 pack.
+  Draft `unquant` was **not** retained (`SPEC_DRAFT_QUANT=auto`), `--quantization`
+  became `modelopt_mixed`, and `--moe-runner-backend flashinfer_cutlass` had to be
+  named explicitly because MIXED_PRECISION auto-resolves to trtllm, which the NVFP4
+  MoE apply rejects at graph capture. Tokenizer/chat template are byte-identical, so
+  the U6 draft map and all prompts transfer. Result: serving is a wash (32k TTFT
+  10.090 vs 10.125 s, 128k 42.05 vs 42.20 s, mixed p95 26.176 vs 26.201 s, decode
+  and streams within noise) and **GSM8K n=200 ties at 194/200 = 97.0%** with paired
+  discordance 2 vs 2. The one real difference is the single-prompt probe (NVIDIA
+  49/60 vs Radix 35/100), which does not generalise. No speed or fit benefit, so no
+  switch. Published NVIDIA scores were not reproduced or reused.
+  Not run: full 1319 GSM8K, 120-turn, BFCL, multilingual, paired vision, 190k/210k.
+  See RESEARCH_LOG U10.
 
 ### U11 — Optional vLLM comparison and capacity experiments
 

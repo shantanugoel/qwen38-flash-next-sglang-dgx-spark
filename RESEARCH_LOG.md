@@ -2280,3 +2280,137 @@ boot per configuration, one host.
 Rollback: none applied at the default level; `MAMBA_SSM_DTYPE` was per-run
 environment only and `scripts/serve.sh` still defaults to `float32`. The FP32
 baseline run that preceded this one is the health check. Next item: U10.
+
+
+## U10 — NVIDIA Qwen3.8-Flash-Next-NVFP4 checkpoint comparison (2026-09-08)
+
+**Decision: Radix retained.** The NVIDIA pack serves correctly on this recipe
+and matches Radix on every serving metric, but paired quality is a tie, so
+nothing warrants a checkpoint switch. The recipe now *supports* the NVIDIA pack
+behind three explicit flags; it is not the default.
+
+Audit before downloading anything. `nvidia/Qwen3.8-Flash-Next-NVFP4`, revision
+`fc694b54fb0174e0913e6adf86691ef85a4ead47` (the September 7 revision named in
+the plan; `lastModified` 2026-09-05T23:36Z, not gated), 11 weight files,
+132.73 GB advertised, 124 GB on disk after download, 2.6 TB free afterwards.
+Its model card describes a mixed-precision export: NVFP4 W4A4 routed experts
+with MSE-calibrated scales, **128x128 block-scaled FP8 MTP routed experts**,
+per-tensor FP8 PLE n-gram embedding, everything else BF16. `hf_quant_config`
+confirms it: `quant_algo` MIXED_PRECISION, `quantized_layers` = 48 `*.mlp.experts`
+NVFP4 g16 + one `FP8` PLE entry + one `FP8_PB_WO` g128 MTP entry.
+Engine support ([#38121](https://github.com/sgl-project/sglang/pull/38121),
+merged 2026-09-05 as `9b2aee22`) is already present in the pinned image:
+`qwen4_exp.py` names this model, `model_config.py` and `arg_groups/overrides.py`
+handle MIXED_PRECISION. No new engine bundle was needed.
+
+Two checkpoint-specific facts decided the flags, both exactly what the plan
+warned about:
+
+- `--quantization modelopt_fp4` is wrong for a MIXED_PRECISION pack; it is
+  `modelopt_mixed`.
+- `--speculative-draft-model-quantization unquant` must **not** be retained.
+  Radix's 31 draft tensors are BF16 inside an NVFP4 pack, which is why `unquant`
+  is right there; NVIDIA's MTP experts are block-scaled FP8. `SPEC_DRAFT_QUANT=auto`
+  omits the flag and the draft loads as `quant_algo=MIXED_PRECISION` in 67–78 s.
+
+A third came out of the first boot rather than the audit. It loaded everything,
+built the table, then died at CUDA graph capture:
+
+    NotImplementedError: Unsupported moe_runner_backend for NVFP4 MoE:
+    MoeRunnerBackend.FLASHINFER_TRTLLM. Use --moe-runner-backend flashinfer_cutlass
+
+`auto` resolves to `flashinfer_cutlass` for Radix's `modelopt_fp4` but to
+`flashinfer_trtllm` for MIXED_PRECISION. Naming `flashinfer_cutlass` explicitly
+therefore *matches* the Radix baseline rather than introducing a variable; it is
+now the `MOE_RUNNER_BACKEND` knob, unset by default.
+
+PLE handling, kept strictly separate per the fixed constraints. The NVIDIA table
+is 128 `ngram_embedding.shard_N.weight` F8_E4M3 tensors totalling 51200245760
+bytes — **the same size as Radix's**, so both map to the same recipe filename and
+a shared directory would have silently mixed checkpoints. It got its own
+`PLE_DIR`; the build logged `0/128 shards already on disk, 128 copied` (~10 min)
+and the second boot logged `128/128 ... 0 copied`. Two harness gaps surfaced and
+were fixed rather than worked around: `ple_identity` refused to run at all when
+the table did not exist yet (`PLE_FIRST_BUILD=1` now binds the identity *before*
+the build and re-samples after), and a table built for a new checkpoint keeps
+the engine's native filename, so identity resolves the backing file by size and
+`bind_identity` now binds the directory as well as the file. Both are covered by
+a new harness test. Sampled digest of the NVIDIA table is
+`a13a022a5e6f0e39bdd564a9c4483e158658b0242f85b3c2e62b1929ab18ac9d` — **identical
+to Radix's**, consistent with the model card's claim that the PLE n-gram
+embedding is copied byte-for-byte from `Qwen/Qwen3.8-Flash-Next-FP8`.
+
+Tokenizer files (`tokenizer.json`, `vocab.json`, `merges.txt`,
+`tokenizer_config.json`, `chat_template.jinja`) are byte-identical between the
+two checkpoints, so prompts, chat template and the U6 65536-id draft token map
+transfer unchanged and the comparison is genuinely matched.
+
+Everything else held fixed: image digest, source `4ccff141`, Torch 2.13.0+cu130,
+FlashInfer 0.6.17, Triton 3.7.1, Transformers 5.12.1, ModelOpt 0.46.0, native
+262144 context, BF16 KV, FP32 SSM, extra_buffer, tracking 64, MAX_TOTAL 524288,
+MAX_RUNNING 4, PREFILL 4096, NEXTN 3/1/4, graph bs=[1,2,3,4], vision retained.
+
+Serving comparison, TAG `u10-nvidia-nvfp4-20260908` vs the matched Radix run
+`u8a-baseline-20260908` (identical suite set):
+
+| Metric | Radix | NVIDIA |
+| --- | ---: | ---: |
+| Reuse boot s | 569.54 | 739.73 |
+| 8k PLE-warm TTFT s | 2.689 | 2.680 |
+| 32k cold TTFT s | 10.125 | 10.090 |
+| 128k cold TTFT s | 42.196 | 42.050 |
+| prefix-warm 8k / 32k / 128k s | 0.286 / 0.315 / 0.656 | 0.290 / 0.320 / 0.650 |
+| Decode off code / prose tok/s | 46.73 / 22.40 | 46.97 / 23.64 |
+| Decode on code / prose tok/s | 38.78 / 25.42 | 36.03 / 28.65 |
+| Streams c=1 / 2 / 4 aggregate | 47.01 / 86.58 / 101.50 | 49.77 / 74.95 / 106.26 |
+| Streams c=4 per-stream | 34.35 | 36.35 |
+| Mixed p95 chunk gap / TTFT s | 26.201 / 28.429 | 26.176 / 28.349 |
+| KV tokens | 524288 | 524288 |
+| Min host MemAvailable GiB | 10.33 | 8.96 |
+| Quality suite | 11/12 | 12/12 |
+| Needles 8k/32k/128k | pass | 32k refused once, 8k/128k pass |
+
+Expanded quality screening, one boot each, same 200 GSM8K questions, thinking
+off, same harness. TAGs `u10-nvidia-gsm8k-20260908` and `u10-radix-gsm8k-20260908`:
+
+| Screening | Radix | NVIDIA |
+| --- | ---: | ---: |
+| GSM8K n=200 | **194/200 = 97.0%** | **194/200 = 97.0%** |
+| Paired outcome | both correct 192, Radix-only 2, NVIDIA-only 2, neither 4 | |
+| GSM8K wall s / median decode tok/s | 1787.3 / 43.75 | 1862.8 / 43.06 |
+| effort_probe 40x | 14/40 (`24`x14, `28`x15, `25`x11) | **34/40** (`24`x34, `28`x6) |
+| effort_probe pooled with the 20x runs | 35/100 = 35% | 49/60 = 82% |
+| 8k needle samples this boot | 5/7 (2 refusals) | 7/7 |
+| spec_accept_length | 3.75 | 3.90 |
+
+Reading it honestly. The probe difference is large, reproducible across separate
+boots of each checkpoint, and measured on identical prompts and flags — the
+NVIDIA pack really is better on *that one arithmetic prompt*. It does not
+generalise: on 200 paired GSM8K questions the two are indistinguishable
+(McNemar 2 vs 2). One idiosyncratic prompt is not a quality argument for a
+checkpoint switch, and the plan's rule is explicit — retain Radix unless paired
+evidence supports quality *and* a real speed or fit benefit warrants switching.
+Speed is a wash across prefill, decode, streams and mixed load; fit is a wash
+(same KV budget, same 51 GB PLE, 124 vs 126 GB on disk); paired quality is a
+tie. So Radix stays. NVIDIA's published GPQA/HLE figures were never treated as
+local results and were not reproduced here.
+
+The needle refusal seen in the NVIDIA serving run is not a checkpoint defect:
+the same refusal strings appear on Radix (2 of 7 samples in its screening boot,
+and in two earlier U7b runs), and NVIDIA scored 7/7 in its own screening boot.
+It is a shared, intermittent model behaviour that the harness scores as a
+recall failure. Same for the quality suite's 12/12 vs 11/12: that is the
+unstable `effort_thinking_off` case, which the probe measures properly.
+
+Limits. One boot per checkpoint for the screening; GSM8K n=200 is a screening,
+not the full 1319; no 120-turn agentic, BFCL, multilingual or long-reasoning
+comparison was run for the NVIDIA pack; 190k/210k unmeasured on both; vision was
+verified only by the positional smoke, not a paired multimodal benchmark. The
+NVIDIA boot is also consistently slower (628–740 s vs 570–584 s) and its runs
+sat ~1.4 GiB lower on host MemAvailable, neither investigated.
+
+Rollback: nothing to roll back — the default `MODEL`/`REVISION`/`QUANTIZATION`/
+`SPEC_DRAFT_QUANT`/`MOE_RUNNER_BACKEND` are unchanged and the Radix screening run
+above is the post-comparison health check (smoke pass, GSM8K 97.0%). The NVIDIA
+checkpoint and its PLE table remain on disk, reusable via the documented env
+knobs. Next item: U11 (not started).

@@ -21,12 +21,18 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def ple_identity(snapshot, directory, model, revision):
+def ple_identity(snapshot, directory, model, revision, require_backing=True):
     """Validate every shard's ends and midpoint without loading the full table.
 
     Sampling is evidence, not a full checksum. Refuse a known identity mismatch
     even if samples coincide. The identity record belongs in results/, never
     alongside the user's existing backing file.
+
+    `require_backing=False` is for the first boot on a checkpoint whose table
+    does not exist yet: it records the identity the directory is about to be
+    bound to (so a second checkpoint still cannot reuse the same file) and
+    reports `state='absent'` with no sample digest. Re-run it after the boot,
+    with the default, to sample the table that was actually built.
     """
     snapshot, directory = Path(snapshot), Path(directory)
     index = snapshot / 'model.safetensors.index.json'
@@ -55,9 +61,28 @@ def ple_identity(snapshot, directory, model, revision):
         a, b = tensor['data_offsets']
         layout.append((filename, start + a, b - a, total))
         total += b - a
+    # The recipe's compat name is preferred (ple_file_compat.py reuses it), but a
+    # table built for a new checkpoint keeps the engine's native name, so fall
+    # back to the one file in the directory with exactly the right size.
     backing = directory / f'ple_table_{total}_{total}.bin'
+    if not (backing.is_file() and backing.stat().st_size == total):
+        candidates = sorted(p for p in directory.glob('*.bin')
+                            if p.is_file() and p.stat().st_size == total)
+        if len(candidates) > 1:
+            raise RuntimeError('several PLE backing files of the expected size; refusing to guess')
+        if candidates:
+            backing = candidates[0]
+    common = {'model': model, 'revision': revision, 'index_sha256': sha(index),
+              'config_sha256': sha(snapshot / 'config.json'),
+              'backing': str(backing.resolve()),
+              'directory': str(directory.resolve()),
+              'bytes': total, 'shards': len(shards)}
     if not backing.is_file() or backing.stat().st_size != total:
-        raise RuntimeError('expected existing PLE backing file missing or wrong size')
+        if require_backing:
+            raise RuntimeError('expected existing PLE backing file missing or wrong size')
+        return {**common, 'device': None, 'inode': None, 'sample_sha256': None,
+                'state': 'absent',
+                'validation': 'table not built yet; identity bound before the build'}
     digest = hashlib.sha256()
     with backing.open('rb') as dst:
         for filename, src_start, size, dst_start in layout:
@@ -70,26 +95,33 @@ def ple_identity(snapshot, directory, model, revision):
                         raise RuntimeError('PLE sample mismatch; refusing reuse')
                     digest.update(a)
     st = backing.stat()
-    return {'model': model, 'revision': revision, 'index_sha256': sha(index),
-            'config_sha256': sha(snapshot / 'config.json'), 'backing': str(backing.resolve()),
-            'device': st.st_dev, 'inode': st.st_ino, 'bytes': total,
-            'shards': len(shards), 'sample_sha256': digest.hexdigest(),
+    return {**common, 'device': st.st_dev, 'inode': st.st_ino,
+            'sample_sha256': digest.hexdigest(), 'state': 'present',
             'validation': '3 byte windows per shard; not a full-file checksum'}
 
 
 def bind_identity(record, registry):
+    """Bind both the backing file and its directory to one checkpoint.
+
+    A table built for a new checkpoint takes the engine's native filename, so
+    binding the path alone would not stop a second checkpoint from writing a
+    differently named table into the same directory. Bind both.
+    """
     registry = Path(registry)
     registry.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256(record['backing'].encode()).hexdigest()
-    p = registry / (key + '.json')
-    if p.exists():
-        old = json.loads(p.read_text())
-        for field in ('model', 'revision', 'index_sha256', 'config_sha256', 'bytes'):
-            if old[field] != record[field]:
-                raise RuntimeError('PLE directory already bound to a different checkpoint')
-    else:
-        with p.open('x') as f:
-            json.dump(record, f, indent=2)
+    for value in (record['backing'], record.get('directory')):
+        if not value:
+            continue
+        key = hashlib.sha256(value.encode()).hexdigest()
+        p = registry / (key + '.json')
+        if p.exists():
+            old = json.loads(p.read_text())
+            for field in ('model', 'revision', 'index_sha256', 'config_sha256', 'bytes'):
+                if old[field] != record[field]:
+                    raise RuntimeError('PLE directory already bound to a different checkpoint')
+        else:
+            with p.open('x') as f:
+                json.dump(record, f, indent=2)
 
 
 def inventory(image, container):

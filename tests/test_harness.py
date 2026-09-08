@@ -229,6 +229,39 @@ class HarnessTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ple_identity(snapshot,ple,'model','revision-a')
 
+    def test_ple_identity_first_build_binds_before_the_table_exists(self):
+        import struct
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d); snapshot=p/'snapshot'; snapshot.mkdir(); ple=p/'ple'; ple.mkdir()
+            tensor='model.ngram_embedding.shard_0.weight'
+            header=json.dumps({tensor:{'dtype':'F8_E4M3','shape':[10], 'data_offsets':[0,10]}}).encode()
+            (snapshot/'weight.safetensors').write_bytes(struct.pack('<Q',len(header))+header+b'abcdefghij')
+            (snapshot/'config.json').write_text('{}')
+            (snapshot/'model.safetensors.index.json').write_text(json.dumps({'weight_map':{tensor:'weight.safetensors'}}))
+            # No backing file yet: the default still refuses, the first-build
+            # form records the identity so the directory is already bound.
+            with self.assertRaises(RuntimeError):
+                ple_identity(snapshot,ple,'model','revision-a')
+            pending=ple_identity(snapshot,ple,'model','revision-a',require_backing=False)
+            self.assertEqual(pending['state'],'absent')
+            self.assertIsNone(pending['sample_sha256'])
+            self.assertEqual(pending['bytes'],10)
+            bind_identity(pending,p/'registry')
+            with self.assertRaises(RuntimeError):
+                bind_identity({**pending,'revision':'revision-b'},p/'registry')
+            # A table built for a new checkpoint keeps the engine's native
+            # filename; identity finds it by size, and the directory binding
+            # still refuses a second checkpoint.
+            (ple/'ple_table_10x1_float8_e4m3fn_10B_rows0-10.bin').write_bytes(b'abcdefghij')
+            built=ple_identity(snapshot,ple,'model','revision-a')
+            self.assertEqual(built['state'],'present')
+            self.assertTrue(built['backing'].endswith('rows0-10.bin'))
+            self.assertEqual(built['directory'],pending['directory'])
+            bind_identity(built,p/'registry')
+            with self.assertRaises(RuntimeError):
+                bind_identity({**built,'backing':built['backing']+'.other',
+                               'revision':'revision-b'},p/'registry')
+
 
 class RequestDeadlineTests(unittest.TestCase):
     def test_oversize_prompt_is_rejected_before_generation(self):

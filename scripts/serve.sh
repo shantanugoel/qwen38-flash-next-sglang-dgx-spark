@@ -36,6 +36,17 @@ MAMBA_STRATEGY="${MAMBA_STRATEGY:-extra_buffer}"
 PAGE_SIZE="${PAGE_SIZE:-64}"
 # U9 knob: recurrent (SSM) state dtype. Accepted default stays float32.
 MAMBA_SSM_DTYPE="${MAMBA_SSM_DTYPE:-float32}"
+# U10 knobs for a different checkpoint. ModelOpt MIXED_PRECISION exports (the
+# NVIDIA NVFP4 pack) are `modelopt_mixed`, not `modelopt_fp4`, and their MTP
+# experts are block-scaled FP8, so `unquant` would be wrong for the draft.
+# SPEC_DRAFT_QUANT=auto omits the flag and lets the draft follow its own config.
+QUANTIZATION="${QUANTIZATION:-modelopt_fp4}"
+SPEC_DRAFT_QUANT="${SPEC_DRAFT_QUANT:-unquant}"
+# Unset keeps SGLang's auto choice, which resolves to flashinfer_cutlass for the
+# Radix modelopt_fp4 pack. A MIXED_PRECISION pack auto-resolves to
+# flashinfer_trtllm, which the NVFP4 MoE apply rejects at graph capture, so that
+# checkpoint has to name the same cutlass runner the Radix recipe already uses.
+MOE_RUNNER_BACKEND="${MOE_RUNNER_BACKEND:-}"
 # Extra raw sglang flags, word-split on purpose: EXTRA_ARGS="--strip-thinking-cache"
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
 
@@ -58,8 +69,10 @@ else
     --speculative-num-steps "${SPEC_STEPS}"
     --speculative-eagle-topk "${SPEC_TOPK}"
     --speculative-num-draft-tokens "${SPEC_DRAFT}"
-    --speculative-draft-model-quantization unquant
   )
+  if [[ -n "${SPEC_DRAFT_QUANT}" && "${SPEC_DRAFT_QUANT}" != "auto" ]]; then
+    SPEC_ARGS+=(--speculative-draft-model-quantization "${SPEC_DRAFT_QUANT}")
+  fi
 fi
 
 docker image inspect "${IMAGE}" >/dev/null
@@ -141,6 +154,9 @@ if [[ -f "${BUILD}/path_ple_table.txt" && -z "${PLE_OFFLOAD_BACKEND:-}" ]]; then
   # Native #37068 defaults to pinned host RAM, which OOMs the 48 GiB table on GB10.
   PLE_OFFLOAD_BACKEND=file
 fi
+if [[ -n "${MOE_RUNNER_BACKEND}" ]]; then
+  opt+=(--moe-runner-backend "${MOE_RUNNER_BACKEND}")
+fi
 if [[ -n "${PLE_OFFLOAD_BACKEND:-}" ]]; then
   opt+=(--ple-offload-backend "${PLE_OFFLOAD_BACKEND}")
   opt+=(--ple-offload-dir /ple)
@@ -180,7 +196,7 @@ docker run -d --name "${CONTAINER}" --init \
     --trust-remote-code \
     --host 0.0.0.0 \
     --port 30000 \
-    --quantization modelopt_fp4 \
+    --quantization "${QUANTIZATION}" \
     --fp4-gemm-backend flashinfer_cutlass \
     --page-size "${PAGE_SIZE:-64}" \
     --mamba-radix-cache-strategy "${MAMBA_STRATEGY:-extra_buffer}" \
