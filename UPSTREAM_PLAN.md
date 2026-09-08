@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a, U6 and U7a accepted; U4b/U4c/U5a rejected; U5b skipped; U7b–U12 not finished**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a, U6 and U7a accepted; U4b/U4c/U5a rejected; U5b skipped; U7b deferred; U8–U12 not finished**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -20,7 +20,8 @@ U6 was accepted the same day: 64k NEXTN `--speculative-token-map` is now the
 serving default (thinking-off code 40.29 → 47.6 tok/s on two launches). Further
 map sizes were not measured. U7a was accepted the same day: MTP graphs already
 capture `bs=[1,2,3,4]` under `MAX_RUNNING=4`; no trim. 1/2/4-stream baseline
-logged. Later items remain unexecuted.
+logged. U7b baseline was executed on September 8 but failed the common gate; candidate
+chunk sizes are deferred. Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -216,7 +217,12 @@ against this endpoint; never report a TB score measured on this Spark.
   and 1/2/4-stream performance. Log decision and commit.
   TAG `u7a-streams-baseline-20260908`. Capture already `bs=[1,2,3,4]`; no trim.
   Streams c=1/2/4 aggregate 48.53 / 77.74 / 104.38 tok/s. Defaults unset. Accepted.
-- [ ] U7b: hold graphs fixed; compare prefill 4096 to 2048/1024, optionally 8192,
+- [x] U7b: **deferred after failed baseline gate**, TAG `u7b-4096-20260908`.
+  Prefill 7/8 (one refusal), quality 11/12 (thinking-off change=25, expected 24).
+  Actual 64k mixed-load 3/3 passed: median TTFT 28.746 s, p95 chunk gap
+  26.538382 s, 2.77 output tokens/chunk. No 2048/1024 candidate launched;
+  4096 unchanged. Server stopped. See RESEARCH_LOG U7b. Original scope:
+  hold graphs fixed; compare prefill 4096 to 2048/1024, optionally 8192,
   one candidate and commit at a time. Measure cold TTFT, aggregate throughput,
   and p50/p95/p99 streamed-chunk gaps when a 64k prefill arrives during two
   decodes. Report tokens per chunk: chunk gaps are not token gaps. A specialized

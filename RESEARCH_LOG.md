@@ -1860,3 +1860,82 @@ raising `MAX_RUNNING` still captures the new reachable sizes.
 Rollback: none (no serving-flag change). Next item: U7b.
 
 
+
+## U7b — Mixed-load baseline and blocked chunk-size comparison (2026-09-08)
+
+**Decision: deferred.** The last accepted configuration failed the common gate.
+Do not promote a chunk-size candidate or treat this run as a validated fallback.
+The harness stopped the server successfully; no candidate flags were applied.
+2048, 1024 and optional 8192 were not run. This follows the plan's explicit
+prohibition on dependent performance tuning while correctness gates remain
+unresolved. The observed model failures do not by themselves diagnose a kernel
+or PLE-state defect. Repeating until a green sample is not a resolution.
+
+Baseline commit `a5ffde93c232e42934b4dd64c97d02f9652dea81`; TAG
+`u7b-4096-20260908`. Image digest
+`sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`,
+image ID `sha256:cdd9649ba1cf472344fd1e11e7cbaa7161a0624329b522931646537cc1c15701`,
+source `4ccff141dbe992794f9da6c3aa23535b4f72000d`. Packages unchanged:
+Torch 2.13.0+cu130, FlashInfer 0.6.17, Triton 3.7.1, Transformers 5.12.1,
+ModelOpt 0.46.0, sglang-kernel 0.4.6.post1. Radix revision
+`7b719225242aacd3dbd3f9407468c2ee9a9d2594`. Native 262144 context, BF16 KV,
+FP32 SSM, extra_buffer, tracking 64, MAX_TOTAL=524288, MAX_RUNNING=4,
+PREFILL=4096, NEXTN 3/1/4 and existing 64k draft map; graph bs=[1,2,3,4].
+PLE prefetch/trimmer 0. GPU inventory: driver 580.173.02, graphics 208 MHz idle,
+reported maximum 3003 MHz; clocks not changed. Vision retained.
+
+Sanitized launch: background `nohup ./scripts/run_config.sh` with
+`TAG=u7b-4096-20260908 PROFILE=u3 PREFILL=4096 MIXEDLOAD=1 PREFILL_BENCH=1
+ONLY=smoke,quality,decode,longctx,prefill,mixedload`, runtime PLE/HF cache reuse.
+A shell-background attempt exited before creating an experiment directory;
+relaunch via Python Popen(start_new_session=True) survived tool return. No GPU
+experiment overlapped. All logs and inventory are under results/TAG.
+
+Before measurement, fixed mixedload to warm once, size via /tokenize, include
+full inter-chunk stalls that cross either prefill boundary, stop the prefill
+window at first token, and report aggregate output tokens per wall second.
+Both decodes must still be active when the prefill arrives. Tokens/chunk uses
+whole-stream completion usage divided by content/reasoning delta count; it is
+not an instantaneous token-gap measurement. Primary metric predeclared before
+results: median per-repeat p95 streamed-chunk gap; >=5% improvement on a second
+launch, with cold TTFT and output throughput tradeoffs reported. No candidate
+comparison was reached. Final benchmark source preserved in the run directory.
+
+| Check | Result |
+| --- | --- |
+| Boot / PLE | 551.01 s; 128/128 shards reused, 0 copied |
+| Smoke / positional vision | pass |
+| Prefill recall, nominal 8k/32k | **7/8, fail**; actual inputs ~5933–5937 / 23724–23728 tokens |
+| Quality | **11/12, fail**; thinking-off change `25`, expected `24` |
+| Separate longctx | pass |
+| Code decode off / on | 47.46 / 39.44 tok/s median, n=3 |
+| Spanish decode off / on | 23.28 / 30.40 tok/s median, n=3 |
+| Mixed actual 64k | warm-up + 3/3 measured needles pass |
+| Minimum MemAvailable / MemFree | 10.660 / 0.683 GiB; swap 0, watchdog did not trip |
+
+The failed prefill request refused: “I cannot provide the access code as it is
+not a real-world fact”; output hit the small response bound. Do not relabel it
+as forgotten state or relax the gate. The thinking-off arithmetic failure is
+in the same case that failed historically, but the current answer is `25`.
+All three measured mixed prompts contained 63981–63985 actual tokens.
+
+| Mixed metric | Median of 3 repeats |
+| --- | ---: |
+| Prefill TTFT | 28.746 s |
+| Streamed-chunk gap p50 / p95 / p99 | 0.000065 / 26.538382 / 26.538480 s |
+| Output tokens per chunk | 2.770 |
+| Aggregate output throughput | 25.099 tok/s |
+
+TTFT range 28.72–28.80 s; p95 range 26.483101–26.554684 s. Aggregate output
+throughput repeats 25.082 / 25.099 / 30.645 tok/s. The long stall straddles the
+prefill window and was omitted by the old within-window-only gap calculation.
+Tiny p50 values reflect delivered chunk bursts, not microsecond model tokens.
+No second-launch confirmation, promotion or expanded-quality pass is claimed.
+
+PLE identity: 51200245760 bytes, inode 19924234, 128 shards; sampled SHA256
+`a13a022a5e6f0e39bdd564a9c4483e158658b0242f85b3c2e62b1929ab18ac9d`
+(three byte windows per shard, not a full checksum). Corrected Triton dispatch,
+PLE-state commit, BF16 KV allocation and unchanged image/flags captured.
+Validation: 37 harness tests plus 3 boundary-gap tests passed; diff check passed.
+Overall experiment status **fail**, stop_exit_code=0. Defaults unchanged.
+Next: independent U8a source audit, with dependent serving tests blocked.

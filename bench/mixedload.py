@@ -15,10 +15,11 @@ import statistics
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from client import chat_stream  # noqa: E402
+from client import base, model, chat_stream  # noqa: E402
 from prefill import haystack  # noqa: E402
 
 OUT = os.environ.get("OUT", "")
@@ -78,9 +79,10 @@ def start_stream(prompt: str, max_tokens: int, holder: dict) -> None:
 
 
 def gaps_in_window(chunks: list[dict], start: float, end: float) -> list[float]:
-    times = [c["t_abs"] for c in chunks if start <= c["t_abs"] <= end]
+    times = [c["t_abs"] for c in chunks]
     times.sort()
-    return [times[i] - times[i - 1] for i in range(1, len(times))]
+    return [times[i] - times[i - 1] for i in range(1, len(times))
+            if times[i] >= start and times[i - 1] <= end]
 
 
 def tokens_per_chunk(result: dict | None) -> float | None:
@@ -103,6 +105,26 @@ def run_one(i: int) -> dict:
             "Reply with the code only."
         ),
     }]
+    # Size using the serving tokenizer; character estimates undershoot by ~25%.
+    estimate = PREFILL_TOKENS
+    for _ in range(6):
+        req = urllib.request.Request(base() + "/tokenize", data=json.dumps({
+            "model": model(), "messages": prefill_msgs,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            tokenized = json.load(response)
+        count = tokenized.get("count", tokenized.get("num_tokens"))
+        if count is None:
+            count = len(tokenized["tokens"])
+        if abs(count - PREFILL_TOKENS) <= 128:
+            break
+        estimate = round(estimate * PREFILL_TOKENS / count)
+        prefill_msgs[0]["content"] = haystack(estimate, salt) + (
+            "\n\nQuestion: What is the NIGHTINGALE access code? Reply with the code only.")
+    else:
+        raise RuntimeError("could not size mixed prefill within 128 tokens")
+    load_start = time.perf_counter()
     holders = []
     for s in range(DECODE_STREAMS):
         holder: dict = {}
@@ -115,12 +137,15 @@ def run_one(i: int) -> dict:
         if holder.get("error"):
             return {"i": i, "ok": False, "error": holder["error"]}
 
+    if any(h["done"].is_set() for h in holders):
+        raise RuntimeError("decode finished before prefill arrival")
+
     print(f">> mixedload {i + 1}/{N} 64k-class prefill during {DECODE_STREAMS} decodes", flush=True)
     prefill_start = time.perf_counter()
     prefill = chat_stream(
         prefill_msgs, max_tokens=32, temperature=0, thinking=False, timeout=1800,
     )
-    prefill_end = time.perf_counter()
+    prefill_end = prefill_start + prefill["ttft_s"]
     for holder in holders:
         holder["done"].wait(1800)
         holder["thread"].join(timeout=5)
@@ -150,6 +175,9 @@ def run_one(i: int) -> dict:
     tpc_ok = [x for x in tpc if x is not None]
     row = {
         "i": i,
+        "aggregate_output_tok_s": round((prefill["completion_tokens"] + sum(
+            (h.get("result") or {}).get("completion_tokens", 0) for h in holders
+        )) / (time.perf_counter() - load_start), 3),
         "prefill_prompt_tokens": prefill["prompt_tokens"],
         "prefill_ttft_s": round(prefill["ttft_s"], 3),
         "prefill_seconds": round(prefill["seconds"], 3),
@@ -184,6 +212,10 @@ def main() -> int:
     if DECODE_STREAMS < 1 or PREFILL_TOKENS < 1000:
         print("MIXEDLOAD_DECODE_STREAMS>=1 and MIXEDLOAD_TOKENS>=1000 required", file=sys.stderr)
         return 1
+    print("Warm-up (excluded from measured repeats)", flush=True)
+    warmup = run_one(-1)
+    if not warmup.get("ok"):
+        raise RuntimeError("mixed-load warm-up failed")
     rows = [run_one(i) for i in range(N)]
     failed = sum(1 for r in rows if not r.get("ok"))
     ttfts = [r["prefill_ttft_s"] for r in rows if r.get("ok")]
@@ -198,6 +230,7 @@ def main() -> int:
             "n": N,
             "prefill_tokens_target": PREFILL_TOKENS,
             "decode_streams": DECODE_STREAMS,
+            "median_aggregate_output_tok_s": statistics.median([r["aggregate_output_tok_s"] for r in rows if r.get("ok")]) if ttfts else None,
             "median_prefill_ttft_s": round(statistics.median(ttfts), 3) if ttfts else None,
             "median_chunk_gap_p50_s": round(statistics.median(p50s), 6) if p50s else None,
             "median_chunk_gap_p95_s": round(statistics.median(p95s), 6) if p95s else None,

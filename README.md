@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a, U6 and U7a are accepted; U4b/U4c/U5a were rejected; U5b skipped.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a, U6 and U7a are accepted; U4b/U4c/U5a were rejected; U5b skipped; U7b is deferred after its baseline failed the common gate.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -8,7 +8,10 @@ state ([#37794](https://github.com/sgl-project/sglang/pull/37794) `spec_utils` h
 only; that PR's NGRAM feature is not ported). Native PLE file backend
 ([#37068](https://github.com/sgl-project/sglang/pull/37068)) with recipe filename reuse.
 The later KDA overlay from #36845 passed isolated tensor replay here and then emitted token-id 0 on a 32k needle;
-it is not the serving default. 8k/32k needles pass. 120k–210k needles are still
+it is not the serving default. The U7b baseline passed the separate 8k/32k
+needle suite and three actual 64k mixed-load needles, but failed one of eight
+prefill recall checks by refusal and scored 11/12 on quality. The server was
+stopped after the failed gate; 2048/1024 tuning was not run. 120k–210k needles are still
 unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 
 **This repo is how you run Qwen3.8-Flash-Next performantly on a single NVIDIA DGX Spark — or any other GB10 machine (ASUS Ascent GX10, MSI Atom, …).**
