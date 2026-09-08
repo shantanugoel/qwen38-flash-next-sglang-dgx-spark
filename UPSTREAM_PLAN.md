@@ -1,11 +1,14 @@
 # Upstream validation plan — September 2026
 
-Status: **U0, U1 and U2 accepted; U3–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0–U3 accepted; U4–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
 ReplaySSM verify now commits PLE n-gram/short-conv state (#37794 `spec_utils`
-hunk only; NGRAM not ported). Later items remain unexecuted.
+hunk only; NGRAM not ported). U3 was accepted on September 8: pin SGLang
+`4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`),
+native PLE file backend, U1 Triton overlay over bundled KDA, U2 PLE commit kept.
+Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -134,30 +137,36 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U3 — Pinned newer SGLang model-development image
 
-- [ ] Recheck registry/source metadata at execution time. Audit on September 7:
-  `qwen38flashnext` manifest `5ae5816783d58e2e56e84d2e863f5441425056f500b7fbd7448c4aae017a2521`
-  was published September 3; `dev-qwen38-next-local` manifest
-  `7b300eccf8ecdd79f27b92a7bff62b415be47790029b0df8df72806977e0af63`
-  was updated September 6. Both have ARM64 images. Use full `sha256:` digest pins.
-  The pending cookbook associates the latter with branch revision `9b2aee2283`.
-  Verify contents: general v0.5.19 is not assumed to contain the model while
-  [#36497](https://github.com/sgl-project/sglang/pull/36497) remains open.
-- [ ] Hold Radix weights and logical serving settings fixed. Reconcile U1/U2 with
-  bundled code, preserve PLE reuse, check effective cache strategy and graph replay.
-- [ ] Run common gates and a one-hour mixed-load soak. Accept for demonstrated
-  correctness/support/maintenance benefit with understood performance changes;
-  otherwise retain the corrected previous baseline. Document and commit.
+- [x] Recheck registry/source metadata at execution time. September 7 audit of
+  `dev-qwen38-next-local` @ `9b2aee2283` was stale by run time. Executed pin is
+  `lmsysorg/sglang:dev-qwen38-next-local` commit `4ccff141` (MTP token-0 router
+  [#38290](https://github.com/sgl-project/sglang/pull/38290)), Hub digest
+  `sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`,
+  local alias `lmsysorg/sglang:dev-qwen38-next-local-4ccff14`. Image id
+  `sha256:cdd9649ba1cf472344fd1e11e7cbaa7161a0624329b522931646537cc1c15701`.
+  Hold that digest; hub tags move.
+- [x] Hold Radix weights and logical serving settings fixed. Reconcile: overlay
+  U1 Triton over bundled KDA QSA; keep U2 ReplaySSM PLE commit (no NGRAM); skip
+  mmap overlay (native `allocate_ple_host_table`); reuse existing
+  `ple_table_51200245760_51200245760.bin` via `ple_file_compat.py`; prefetch and
+  RSS trimmer off. Empty `PLE_OFFLOAD_BACKEND` must default to `file` or the
+  native pinned-RAM path OOMs.
+- [x] Common gates + one-hour soak on TAG `u3-dev-4ccff14-20260908b`. Soak
+  2214/2214. Decode overlaps U2 within noise. Quality 11/12 is the known
+  `effort_thinking_off` miss (`28` not `24`). Agentic late-recall fails by
+  refusal, not forgotten state. Accepted. See RESEARCH_LOG U3.
 
 ### U4 — Native PLE backend, prefetch and resident-memory control
 
-- [ ] U4a: adopt native allocation from
+- [ ] U4a: U3 already adopted native allocation from
   [#37068](https://github.com/sgl-project/sglang/pull/37068) with
-  [#38123](https://github.com/sgl-project/sglang/pull/38123), initially disabling
-  prefetch/trimming where supported to isolate allocation. Its loader rewrites
-  the full table each boot: preserve validated reuse rather than blindly dropping
-  our patch. Reconcile file names and checkpoint identity without writes under
-  `~/ai`; use a new workspace backing file if needed. Check shard samples and
-  two boots with explicit reuse logs and timing. Log decision and commit.
+  [#38123](https://github.com/sgl-project/sglang/pull/38123), prefetch/trimming
+  disabled, filename compat, and one successful reuse boot (`128/128` in 624 s).
+  Remaining: a second boot with explicit reuse logs/timing, and do not drop the
+  reuse patch (the native loader still rewrites the full table each boot).
+  Reconcile file names and checkpoint identity without writes under `~/ai`.
+  Skip soak (`ONLY=` / unset `SOAK_SECONDS`; `SOAK_SECONDS=0` is still truthy).
+  Log decision and commit.
 - [ ] U4b: enable prefill page prefetch alone; measure cold/warm prefill, I/O,
   synchronization cost and decode under prefill. Log decision and commit.
 - [ ] U4c: evaluate the RSS trimmer separately with a one-hour growing-context

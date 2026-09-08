@@ -15,6 +15,12 @@ from pathlib import Path
 from inventory import ROOT, bind_identity, command, inventory, ple_identity
 
 
+def default_if_blank(env, key, value):
+    """Set env[key] when missing or whitespace-only (exported empty strings count)."""
+    if not str(env.get(key) or '').strip():
+        env[key] = value
+
+
 def bounded(args, log, seconds, env=None, guard=None):
     """Kill the complete child process group on deadline or guard failure."""
     with Path(log).open('w') as output:
@@ -61,6 +67,12 @@ def validate(name, report):
         s = report['summary']
         return (s.get('n', 0) > 0 and 'accuracy' in s
                 and len(report.get('results') or []) == s['n'])
+    if name == 'soak':
+        s = report['summary']
+        target = float(s.get('target_seconds') or 0)
+        return (s.get('errors', 1) == 0 and s.get('ok', 0) > 0
+                and s.get('requests', 0) == len(report.get('results') or [])
+                and (target <= 0 or float(s.get('seconds') or 0) >= 0.9 * target))
     return False
 
 
@@ -81,6 +93,9 @@ def suites(out, env, guard=None):
         if env.get('GSM8K_N'):
             tasks += [('gsm8k', [sys.executable, str(ROOT / 'bench/gsm8k.py')],
                        {'N': env['GSM8K_N'], 'THINKING': env.get('GSM8K_THINKING', 'off')})]
+    if env.get('SOAK_SECONDS'):
+        tasks += [('soak', [sys.executable, str(ROOT / 'bench/soak.py')],
+                   {'SOAK_SECONDS': env['SOAK_SECONDS']})]
     if only := env.get('ONLY'):
         wanted = {name.strip() for name in only.split(',') if name.strip()}
         tasks = [t for t in tasks if t[0] in wanted]
@@ -95,6 +110,8 @@ def suites(out, env, guard=None):
             timeout = float(env.get('SUITE_TIMEOUT', '900'))
             if name == 'gsm8k':
                 timeout = float(env.get('GSM8K_TIMEOUT', str(timeout)))
+            if name == 'soak':
+                timeout = float(env.get('SOAK_SECONDS', '3600')) + 300
             rc = bounded(args, out / (name + '.log'), timeout, child_env, guard)
             row['exit_code'] = rc
             if name == 'smoke':
@@ -138,7 +155,8 @@ SAFE_FLAGS = {'model_path', 'revision', 'served_model_name', 'context_length',
               'reasoning_parser', 'tool_call_parser', 'preferred_sampling_params',
               'fp4_gemm_backend', 'moe_runner_backend', 'kv_cache_dtype',
               'enable_linear_replayssm_spec', 'enable_gdn_replayssm_spec',
-              'enable_linear_replayssm', 'enable_gdn_replayssm', 'max_total_num_tokens'}
+              'enable_linear_replayssm', 'enable_gdn_replayssm', 'max_total_num_tokens',
+              'ple_offload_embedding', 'ple_offload_backend', 'ple_offload_dir'}
 
 
 def safe_server_info(server):
@@ -253,7 +271,8 @@ def run(out, env):
             if any(key in line for key in ('shards already on disk', 'KV Cache',
                 'max_total_num_tokens=', 'CUDA graph', 'Load weight end',
                 'KDA Qwen3.8 QSA', 'Using the Codex/Kimi',
-                'Triton SM121 QSA', 'committing PLE n-gram')))
+                'Triton SM121 QSA', 'committing PLE n-gram',
+                'file-backed mmap', 'reusing recipe backing file')))
         (out / 'boot-facts.txt').write_text(facts)
         if env.get('QSA_KERNEL_CHECK') == '1':
             if 'KDA Qwen3.8 QSA' in facts or 'Using the Codex/Kimi' in facts:
@@ -277,7 +296,7 @@ def run(out, env):
             result['metrics'] = metrics
         except (OSError, ValueError):
             result['metrics'] = {}
-        if env.get('PROFILE') == 'u2' and env.get('SPEC', 'nextn') != 'off':
+        if env.get('PROFILE') in ('u2', 'u3') and env.get('SPEC', 'nextn') != 'off':
             served_proc = subprocess.run(['docker', 'logs', '--tail', '8000', container],
                                          capture_output=True, text=True, timeout=20)
             served = served_proc.stdout + served_proc.stderr
@@ -342,6 +361,16 @@ def main():
             env.setdefault('GSM8K_TIMEOUT', '7200')
             if 'NGRAM' in env.get('EXTRA_ARGS', '').upper():
                 raise SystemExit('U2 isolates the PLE commit; do not enable NGRAM')
+        elif env.get('PROFILE') == 'u3':
+            env.setdefault('TURNS', '120')
+            env.setdefault('SIZES', '8k,32k')
+            env.setdefault('SUITE_TIMEOUT', '1800')
+            env.setdefault('REQUEST_TIMEOUT', '900')
+            env.setdefault('QSA_KERNEL_CHECK', '1')
+            env.setdefault('SOAK_SECONDS', '3600')
+            default_if_blank(env, 'PLE_OFFLOAD_BACKEND', 'file')
+            env.setdefault('SGLANG_QWEN4_PLE_FILE_PREFETCH', '0')
+            env.setdefault('SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB', '0')
         try:
             if sys.argv[1:] == ['run']:
                 return run(out, env)

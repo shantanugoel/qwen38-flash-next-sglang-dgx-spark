@@ -32,11 +32,10 @@ def main(path: str) -> int:
     with open(path, encoding="utf-8") as f:
         src = f.read()
 
-    if "if is_sm121():" not in src:
-        print("ALREADY PATCHED (no is_sm121 intercept):", path)
-        return 0
-
     n = src.count(OLD)
+    if n == 0:
+        print("ALREADY PATCHED (no SM121 SDPA intercept):", path)
+        return 0
     if n != 1:
         print("ERROR: expected 1 SDPA intercept, found %d" % n)
         return 1

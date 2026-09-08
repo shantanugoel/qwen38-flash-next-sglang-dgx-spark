@@ -3,7 +3,7 @@
 **Current campaign:** [September upstream validation plan](UPSTREAM_PLAN.md).
 The August plan below is historical; stale TODO/status and skip-list entries do
 not authorize rerunning completed experiments. See RESEARCH_LOG.md for outcomes.
-U0, U1 and U2 are accepted; later campaign items have not started.
+U0–U3 are accepted; later campaign items have not started.
 
 Goal: keep a **single DGX Spark / GB10** recipe, stay on **Radix NVFP4**, and raise
 quality then speed for long-horizon agentic work (search/scrape/facts/tools/code/prose,
@@ -29,11 +29,15 @@ rule at every step so a later agent cannot “just wait” on an 8–20 min boot
 
 ## What we already know (do not re-learn)
 
-Current public recipe (`scripts/serve.sh`): SGLang `lmsysorg/sglang:qwen38flashnext`,
-PLE `torch.from_file` mmap, QSA SM121 Triton (#36845), ReplaySSM verify commits PLE
-state (#37794 `spec_utils` hunk), MTP NEXTN 3/1/4 + `unquant`, decode
+Current public recipe (`scripts/serve.sh`): SGLang
+`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`
+(commit `4ccff141`; local alias `lmsysorg/sglang:dev-qwen38-next-local-4ccff14`),
+native PLE file backend (`--ple-offload-backend file`) with recipe filename reuse,
+QSA SM121 Triton (#36845 overlay; bundled KDA stays off), ReplaySSM verify commits
+PLE state (#37794 `spec_utils` hunk), MTP NEXTN 3/1/4 + `unquant`, decode
 `trtllm_mha`, prefill `triton`, CUDA graphs on, `--mem-fraction-static 0.95`,
 `--context-length 262144`, `--chunked-prefill-size 4096`, `--max-running-requests 4`.
+Prefetch and RSS trimming stay off until U4b/U4c.
 
 Published on this box 2026-08-27 (clock-capped GB10, thinking **off**): **40.2 tok/s
 code** (median 38.8) / **~20 tok/s** thinking-on chat. vLLM mmap+MTP=2 was ~27 tok/s.

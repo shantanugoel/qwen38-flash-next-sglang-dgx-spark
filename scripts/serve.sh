@@ -72,6 +72,25 @@ UIDGID="$(docker_user)"
 extra_gpu_groups
 mkdir -p "${PLE_DIR}" "${SGLANG_CACHE}"
 
+MOUNTS=(
+  -v "${QWEN4_BACKEND}:${QWEN4_IN_IMAGE}:ro"
+  -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro"
+  -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro"
+  -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro"
+)
+if [[ -f "${BUILD}/path_ple_table.txt" && -f "${PLE_TABLE_BACKEND}" ]]; then
+  MOUNTS+=(-v "${PLE_TABLE_BACKEND}:$(cat "${BUILD}/path_ple_table.txt"):ro")
+fi
+
+if [[ -f "${BUILD}/path_ple_table.txt" && -z "${PLE_OFFLOAD_BACKEND:-}" ]]; then
+  # Native #37068 defaults to pinned host RAM, which OOMs the 48 GiB table on GB10.
+  PLE_OFFLOAD_BACKEND=file
+fi
+if [[ -n "${PLE_OFFLOAD_BACKEND:-}" ]]; then
+  opt+=(--ple-offload-backend "${PLE_OFFLOAD_BACKEND}")
+  opt+=(--ple-offload-dir /ple)
+fi
+
 docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
 
 docker run -d --name "${CONTAINER}" --init \
@@ -90,14 +109,14 @@ docker run -d --name "${CONTAINER}" --init \
   -e HF_TOKEN \
   -e HF_HOME=/huggingface \
   -e SGLANG_QWEN4_PLE_MMAP_DIR=/ple \
+  -e SGLANG_QWEN4_PLE_FILE_DIR=/ple \
+  -e SGLANG_QWEN4_PLE_FILE_PREFETCH="${SGLANG_QWEN4_PLE_FILE_PREFETCH:-0}" \
+  -e SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB="${SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB:-0}" \
   -e SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN \
   -v "${HF_CACHE}:/huggingface" \
   -v "${SGLANG_CACHE}:/tmp/.cache/sglang" \
   -v "${PLE_DIR}:/ple" \
-  -v "${QWEN4_BACKEND}:${QWEN4_IN_IMAGE}:ro" \
-  -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro" \
-  -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro" \
-  -v "${BUILD}/sm121_varlen.py:${SM121_IN_IMAGE}:ro" \
+  "${MOUNTS[@]}" \
   "${IMAGE}" \
   sglang serve \
     --model-path "${MODEL}" \

@@ -1,5 +1,6 @@
 /.env
 /build/
+/build-u2-accepted/
 /data/
 /results/
 __pycache__/

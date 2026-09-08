@@ -41,6 +41,16 @@ extract "${qwen4_path}" "${QWEN4_BACKEND}"
 extract "${qsa_path}" "${QSA_BACKEND}"
 extract "${spec_utils_path}" "${SPEC_UTILS_BACKEND}"
 
+ple_table_path="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
+  'import sglang.srt.models.qwen4_exp_ple_table as m; print(m.__file__)' | tail -1)" || ple_table_path=""
+if [[ -n "${ple_table_path}" ]]; then
+  printf '%s\n' "${ple_table_path}" > "${BUILD}/path_ple_table.txt"
+  extract "${ple_table_path}" "${PLE_TABLE_BACKEND}"
+  python3 "${ROOT}/patches/ple_file_compat.py" "${PLE_TABLE_BACKEND}"
+else
+  rm -f "${BUILD}/path_ple_table.txt" "${PLE_TABLE_BACKEND}"
+fi
+
 python3 "${ROOT}/patches/ple_mmap.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/ple_reuse.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/qsa_drop_sm121_sdpa.py" "${QSA_BACKEND}"
@@ -56,19 +66,25 @@ python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}" "${SPEC_UTILS_BACKEND}
   "${BUILD}/kda_kernels/__init__.py" \
   "${BUILD}/kda_kernels/qwen38_qsa_sm121/__init__.py" \
   "${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py"
+if [[ -f "${PLE_TABLE_BACKEND}" ]]; then
+  python3 -m py_compile "${PLE_TABLE_BACKEND}"
+fi
 
 python3 - <<PY
 from pathlib import Path
 qwen4 = Path("${QWEN4_BACKEND}").read_text()
 qsa = Path("${QSA_BACKEND}").read_text()
 spec = Path("${SPEC_UTILS_BACKEND}").read_text()
-assert "_alloc_ple_table" in qwen4, "PLE mmap helper missing"
-assert "_alloc_ple_table(source_weight.shape" in qwen4
+native = Path("${PLE_TABLE_BACKEND}")
+assert "_alloc_ple_table" in qwen4 or "allocate_ple_host_table" in qwen4, "PLE host table missing"
+if "_alloc_ple_table" in qwen4:
+    assert "_alloc_ple_table(source_weight.shape" in qwen4
 assert "_ple_shard_matches" in qwen4, "PLE mmap reuse fast path missing"
 assert "return self._forward_sm121_sdpa_sparse" not in qsa, "SM121 SDPA intercept still present"
 assert "is_sm100_supported() or is_sm120_supported()" not in qsa, (
     "widened TRT-LLM gate still present")
 assert "kda_kernels.qwen38_qsa_sm121" not in qsa, "KDA serving route must stay off"
+assert "qwen38_qsa_sm121_varlen" not in qsa, "bundled KDA SM121 route must be replaced"
 assert "qsa.sm121_varlen" in qsa, "Triton SM121 route missing"
 assert "ReplaySSM verify: committing PLE n-gram/short-conv state" in spec, (
     "ReplaySSM PLE commit missing")
@@ -79,6 +95,9 @@ assert "Qwen4 PLE does not support NGRAM speculation" in qwen4, (
     "NGRAM guard must stay; U2 does not port #37794 NGRAM")
 assert Path("${BUILD}/sm121_varlen.py").is_file()
 assert Path("${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py").is_file()
+if native.is_file():
+    table = native.read_text()
+    assert "reusing recipe backing file" in table, "PLE filename compat missing"
 print("patches ok")
 PY
 

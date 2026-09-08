@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${IMAGE:-lmsysorg/sglang:qwen38flashnext}"
+# U3 pin: SGLang 4ccff141 (MTP token-0 router #38290 + native PLE file backend).
+# Hub tags move; clones pull this digest. Local alias:
+#   lmsysorg/sglang:dev-qwen38-next-local-4ccff14
+IMAGE="${IMAGE:-lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6}"
 CONTAINER="${CONTAINER:-qwen38-flash-next}"
 MODEL="${MODEL:-RadixArk/Qwen3.8-Flash-Next-NVFP4}"
 REVISION="${REVISION:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}"
@@ -14,6 +17,7 @@ BUILD="${BUILD:-$ROOT/build}"
 QWEN4_BACKEND="${BUILD}/qwen4_exp.py"
 QSA_BACKEND="${BUILD}/qwen_sparse_attn_backend.py"
 SPEC_UTILS_BACKEND="${BUILD}/spec_utils.py"
+PLE_TABLE_BACKEND="${BUILD}/qwen4_exp_ple_table.py"
 SNAPSHOT="${HF_CACHE}/hub/models--${MODEL//\//--}/snapshots/${REVISION}"
 
 docker_user() {

@@ -45,9 +45,7 @@ ANCHOR = """    try:
         from flash_attn import flash_attn_varlen_func
 """
 
-HUNK = """    from sglang.srt.utils import is_sm121
-
-    if is_sm121():
+TRITON_SM121 = """    if is_sm121():
         import logging
 
         from sglang.srt.layers.attention.qsa.sm121_varlen import (
@@ -61,7 +59,18 @@ HUNK = """    from sglang.srt.utils import is_sm121
             "Using sglang#36845 2026-08-28 Triton SM121 QSA varlen fallback"
         )
         return _qsa_sm121_triton_varlen
-""" + ANCHOR
+"""
+
+HUNK = "    from sglang.srt.utils import is_sm121\n\n" + TRITON_SM121 + ANCHOR
+
+# Bundled #36845 KDA overlay on qwen4-main-squashed / dev-qwen38-next-local.
+KDA_BUNDLED = """    if is_sm121():
+        from sglang.kernels.ops.attention import (
+            qwen38_qsa_sm121_varlen,
+        )
+
+        return qwen38_qsa_sm121_varlen
+"""
 
 
 def main(path: str) -> int:
@@ -76,6 +85,14 @@ def main(path: str) -> int:
     if GATE_WIDENED in src:
         print("ERROR: the trtllm gate was widened (old patch 2). Re-extract the pristine file.")
         return 1
+    if KDA_BUNDLED in src:
+        if src.count(KDA_BUNDLED) != 1:
+            print("ERROR: bundled KDA SM121 block is not unique")
+            return 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src.replace(KDA_BUNDLED, TRITON_SM121, 1))
+        print("PATCHED (replaced bundled KDA):", path)
+        return 0
     n = src.count(ANCHOR)
     if n != 1:
         print(f"ERROR: expected 1 varlen fallback anchor, found {n}")

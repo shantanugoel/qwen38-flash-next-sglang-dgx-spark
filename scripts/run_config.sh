@@ -8,5 +8,9 @@ source "${SCRIPT_DIR}/common.sh"
 load_hf_token
 export IMAGE CONTAINER REVISION SERVED_NAME HF_CACHE PLE_DIR SGLANG_CACHE BUILD SNAPSHOT
 export RECIPE_MODEL="${MODEL}"
+# Empty would block experiment.py setdefault; only export a real backend.
+if [[ -n "${PLE_OFFLOAD_BACKEND:-}" ]]; then
+  export PLE_OFFLOAD_BACKEND
+fi
 cd "${ROOT}"
 exec python3 -u "${SCRIPT_DIR}/experiment.py" run

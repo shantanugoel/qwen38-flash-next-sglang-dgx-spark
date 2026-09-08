@@ -119,8 +119,8 @@ def main(path: str) -> int:
     if "_ple_shard_matches" in src:
         print("ALREADY PATCHED:", path)
         return 0
-    if "_alloc_ple_table" not in src:
-        print("ERROR: run ple_mmap.py first")
+    if "_alloc_ple_table" not in src and "allocate_ple_host_table" not in src:
+        print("ERROR: run ple_mmap.py first, or use a native PLE file-backend tree")
         return 1
     if src.count(ORIG) != 1:
         print("ERROR: could not locate the PLE shard copy")

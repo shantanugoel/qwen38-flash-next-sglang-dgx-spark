@@ -1,11 +1,13 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 7 upstream campaign:** **U0–U2 are accepted.** Sparse decode on GB10
-uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
-not a widened TRT-LLM/XQA gate. ReplaySSM verify commits PLE n-gram/short-conv
+**September 2026 upstream campaign:** **U0–U3 are accepted.** Serving image is
+SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
+Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
+overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
 state ([#37794](https://github.com/sgl-project/sglang/pull/37794) `spec_utils` hunk
-only; that PR's NGRAM feature is not ported). The later KDA overlay from #36845
-passed isolated tensor replay here and then emitted token-id 0 on a 32k needle;
+only; that PR's NGRAM feature is not ported). Native PLE file backend
+([#37068](https://github.com/sgl-project/sglang/pull/37068)) with recipe filename reuse.
+The later KDA overlay from #36845 passed isolated tensor replay here and then emitted token-id 0 on a 32k needle;
 it is not the serving default. 8k/32k needles pass. 120k–210k needles are still
 unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 
@@ -14,7 +16,8 @@ unmeasured on this box. See the [staged plan](UPSTREAM_PLAN.md).
 Serve [`RadixArk/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4) with **SGLang** (128 GB unified memory). Native 262k context, MTP speculative decode, CUDA graphs.
 
 - **What:** 125B MoE + 51B n-gram PLE, 6B active, NVFP4 routed experts. The checkpoint is ~135 GB; a Spark has 128 GB. Stock `--ple-offload-embedding` pins the 48 GB PLE table in the *same* UMA pool, so it does not fit.
-- **Why mmap:** a token reads 16 PLE rows (~2.5 KB). File-backed `torch.from_file` keeps the table on NVMe. CUDA graphs still work because the GPU walks the host page tables.
+- **Why mmap:** a token reads 16 PLE rows (~2.5 KB). File-backed mmap
+  (`--ple-offload-backend file`) keeps the table on NVMe. CUDA graphs still work because the GPU walks the host page tables. Native pinned-host allocation OOMs the 48 GiB table on GB10.
 - **QSA on sm_121:** stock SGLang gates TRT-LLM sparse decode to SM100. GB10 is SM121, so that call would fall into FA4 (does not compile) or, if the gate is widened, FlashInfer XQA (silent token-id-0 garbage). We leave the stock SM100 gate closed and route packed varlen decode through the #36845 2026-08-28 Triton kernel.
 - **MTP:** the 31 draft tensors are still BF16 inside this NVFP4 pack. `--speculative-draft-model-quantization unquant` stops the draft inheriting `modelopt_fp4`.
 - **Non-root:** the container runs as your uid. Hugging Face cache and the PLE backing file stay host-owned.
@@ -51,7 +54,7 @@ Stop: `./scripts/stop.sh`. Default bind is `127.0.0.1`. LAN: `BIND_ADDR=0.0.0.0 
 | `PORT` | `30000` |
 | `HF_CACHE` | `$HF_HOME` or `~/.cache/huggingface` |
 | `PLE_DIR` | `./data/ple` (sparse ~48 GB backing file) |
-| `IMAGE` | `lmsysorg/sglang:qwen38flashnext` |
+| `IMAGE` | `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6` (SGLang `4ccff141`; local alias `lmsysorg/sglang:dev-qwen38-next-local-4ccff14`) |
 
 ## Controlled experiments
 
@@ -100,18 +103,21 @@ backend/checkpoint will need an explicit identity migration in its plan item.
 
 ## Boot time
 
-The 48 GiB PLE table lives in a file-backed mmap that survives restarts, but
-SGLang re-copies it out of the checkpoint on every boot, in shards, through
-`copy_ple_rows_to_tp_embedding`. On this box that copy alone runs 45–60 min.
-`patches/ple_reuse.py` byte-samples each shard against the checkpoint and skips
-the ones already on disk, so only the **first** boot pays the fill:
+The 48 GiB PLE table lives in a file-backed mmap that survives restarts
+(`--ple-offload-backend file` on the U3 image). SGLang still re-copies it out of
+the checkpoint on every boot, in shards, through `copy_ple_rows_to_tp_embedding`
+unless `patches/ple_reuse.py` byte-samples each shard and skips the ones already
+on disk. Native #37068 names the file differently; `patches/ple_file_compat.py`
+keeps using `ple_table_{numel}_{nbytes}.bin` when that file is already present.
+Only the **first** fill pays the 45–60 min copy:
 
 ```
 PLE table: 128/128 shards already on disk (320001536 rows)
 ```
 
-Second and later boots are **~10 min** end to end. Set
-`SGLANG_QWEN4_PLE_REUSE=0` to force the full copy.
+Second and later boots are **~10 min** end to end (U3 reuse boot 624 s). Set
+`SGLANG_QWEN4_PLE_REUSE=0` to force the full copy. Empty `PLE_OFFLOAD_BACKEND`
+must default to `file`; native pinned RAM OOMs.
 
 ## Tuning
 
@@ -129,6 +135,7 @@ Second and later boots are **~10 min** end to end. Set
 | `MAMBA_STRATEGY` | `extra_buffer` | Required for `page_size > 1`; guards MTP rewind vs GDN state |
 | `PAGE_SIZE` | `64` | Ignored — compressed QSA pins it to 64 |
 | `EXTRA_ARGS` | empty | Raw extra `sglang serve` flags |
+| `PLE_OFFLOAD_BACKEND` | `file` when the native table module exists | Native #37068 defaults to pinned host RAM; that OOMs the 48 GiB table on GB10 |
 
 ## Client notes
 
@@ -149,13 +156,12 @@ Second and later boots are **~10 min** end to end. Set
   in this README, so treat it as "fewer and unpredictable", not as a fixed ratio.
   Nothing is corrupted either way. An agent loop that treats "no tool call" as a
   stall should drive tool-heavy phases with `enable_thinking: false`.
-- **Thinking on can refuse to repeat something it was told to keep quiet.** In one
-  120-turn run the model was asked at turn 120 for a code it had been given at
-  turn 3 alongside the note "Do not repeat unless asked". With thinking off it
-  answered. With thinking on it recalled the source correctly but declined to
-  repeat the value, reasoning about disclosure first. Recall was intact; the
-  behaviour was a refusal. Worth knowing if an agent stores credentials in its own
-  transcript and later needs them back.
+- **The model can refuse to repeat something it was told to keep quiet.** In 120-turn
+  runs the model is asked at turn 120 for a code planted at turn 3 alongside
+  "Do not repeat unless asked" in `ops/secrets.md`. U2 thinking-off reprinted it;
+  U2 thinking-on and both U3 thinking modes recalled the source and declined to
+  print the value. Recall was intact; the harness fail is a refusal. Worth knowing
+  if an agent stores credentials in its own transcript and later needs them back.
 
 ## Benchmarks
 
@@ -190,12 +196,52 @@ Terminal-Bench number in this repo was measured on a Spark.
 
 Single stream, `RadixArk/Qwen3.8-Flash-Next-NVFP4`, MTP 3/1/4, `trtllm_mha`
 dense decode, QSA sparse decode via #36845 Triton, `triton` prefill, CUDA graphs,
-radix cache on, **vision on**, 262k context, clock-capped GB10. U2 numbers
-(`u2-ple-commit-20260907`) are the current default. U1 Triton (`u1-triton-20260907`)
+radix cache on, **vision on**, 262k context, clock-capped GB10. U3 numbers
+(`u3-dev-4ccff14-20260908b`) are the current default. U2 PLE commit
+(`u2-ple-commit-20260907`) is the previous serving image. U1 Triton (`u1-triton-20260907`)
 is the previous QSA-corrected baseline. August 28 tables below those blocks are
 the historical widened-gate recipe.
 
-### U2 current default (2026-09-07, PLE commit after ReplaySSM verify)
+### U3 current default (2026-09-08, SGLang `4ccff141`)
+
+Image digest `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`
+(commit `4ccff141`, MTP token-0 router [#38290](https://github.com/sgl-project/sglang/pull/38290),
+native PLE file backend [#37068](https://github.com/sgl-project/sglang/pull/37068)).
+U1 Triton overlays bundled KDA QSA. U2 ReplaySSM PLE commit stays. Prefetch and
+RSS trimming off. Filename compat reuses `ple_table_51200245760_51200245760.bin`.
+
+Boot 624 s, PLE `128/128 shards already on disk`, Triton SM121 QSA, ReplaySSM PLE
+commit on the serving path. Vision, tools, executed code, 8k/32k needles all pass.
+0 invalid tool calls. One-hour soak **2214/2214**. Isolated QSA check: Triton/wrapper
+rel-L2 ~0 vs FP32, KDA ~0.00225, CUDA-graph replay 0.000.
+
+Harness `experiment_status` is fail: quality 11/12 (`effort_thinking_off` answered
+`28` not `24` at temperature 0) and both 120-turn late-recall checks were
+disclosure-style refusals of `ops/secrets.md`, not forgotten codes. GSM8K was not
+part of the U3 gate (last measured: U2 n=200 **193/200**).
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 38.99 (37.49–40.52) | 32.83 (31.66–34.17) |
+| prose ES | 21.88 (21.27–22.69) | 24.17 (23.21–27.95) |
+
+U2 was 38.56 / 35.74 code and 22.92 / 26.91 prose. Thinking-off overlaps U2;
+thinking-on code is ~8% slower. This is a new engine image plus #38290, not a
+speed claim.
+
+| Longctx | first s | resend s | speedup | needle |
+| --- | ---: | ---: | ---: | --- |
+| 8k (5885 tok) | 4.34 | 0.59 | 7.3× | PASS |
+| 32k (23555 tok) | 10.44 | 0.50 | 21.1× | PASS |
+
+| 120-turn | wall | tools | invalid | late recall | decode bands |
+| --- | ---: | ---: | ---: | --- | --- |
+| thinking off | 172 s | 119/120 | 0 | refusal | 49.45 / 49.45 / 49.28 tok/s |
+| thinking on | 497 s | 106/120 | 0 | refusal | 33.31 / 30.97 / 29.95 tok/s |
+
+**Not a 120k+ test.** End-of-run `spec_accept_length` 3.3 after soak.
+
+### U2 previous image (2026-09-07, PLE commit after ReplaySSM verify)
 
 `--enable-gdn-replayssm-spec` is a deprecated alias of
 `--enable-linear-replayssm-spec`. On this image that sets `replayssm_spec_fold`,
@@ -256,30 +302,31 @@ overlay on this same image failed that 32k needle with 64× token id 0.
 
 120 turns, one tool call per turn, growing context, `bench/agentic.py`.
 
-Measured on the U2 shipped config (`u2-ple-commit-20260907`), thinking **off**:
+Measured on the U3 shipped config (`u3-dev-4ccff14-20260908b`), thinking **off**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.56 s | 57.4 tok/s | 95.6% | 2.5k |
-| 41–80 | 0.56 s | 57.5 tok/s | 98.4% | 6.7k |
-| 81–120 | 0.57 s | 57.4 tok/s | **99.0%** | 10.9k |
+| 1–40 | 0.57 s | 49.45 tok/s | 96.2% | 2.7k |
+| 41–80 | 0.57 s | 49.45 tok/s | 98.5% | 7.5k |
+| 81–120 | 0.57 s | 49.28 tok/s | **99.1%** | 12.2k |
 
-119/120 turns emitted a tool call, **0 invalid tool calls**, a fact planted at
-turn 3 was recalled correctly at turn 120, 127 s wall clock, final context 12985
-tokens. **TTFT is flat as context grows** — that is the radix cache absorbing the
-resend pattern. Decode here is tool-JSON-heavy and is not the code/prose table.
+119/120 turns emitted a tool call, **0 invalid tool calls**, 172 s wall clock,
+final context 14577 tokens. **TTFT is flat as context grows** — that is the radix
+cache absorbing the resend pattern. Decode here is tool-JSON-heavy and is not the
+code/prose table. Late recall refused to reprint the planted `ops/secrets.md`
+code; the answer still cited that file (disclosure, not forgotten state). U2
+thinking-off late recall passed.
 
 Same session, thinking **on**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.39 s | 31.6 tok/s | 94.7% | 2.8k |
-| 41–80 | 0.38 s | 29.7 tok/s | 98.0% | 7.9k |
-| 81–120 | 0.33 s | 25.6 tok/s | **99.3%** | 13.7k |
+| 1–40 | 0.39 s | 33.31 tok/s | 94.5% | 2.8k |
+| 41–80 | 0.46 s | 30.97 tok/s | 96.4% | 7.7k |
+| 81–120 | 0.42 s | 29.95 tok/s | **98.7%** | 12.5k |
 
-0 invalid tool calls, 677 s wall clock. Tool frequency 76/120 this run (U1 was
-119/120). Late recall was a disclosure-style refusal of the planted code, not a
-forgotten value; the dedicated PLE-spec recall test passed.
+0 invalid tool calls, 497 s wall clock. Tool frequency 106/120 this run (U2 was
+76/120, U1 119/120). Late recall was again a disclosure-style refusal.
 
 Repeated 40-turn runs land at 48–52 tok/s decode, 0.56–0.60 s TTFT and
 97.3–97.5% cache hit, with **0 invalid tool calls** every time.
@@ -313,8 +360,8 @@ would suggest.
 
 | | |
 | --- | ---: |
-| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **11/12** (U2) / 12/12 (U1) |
-| MTP `spec_accept_length` | **3.73** end-of-U2 mixed load (was 3.93–3.95) |
+| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **11/12** (U3 and U2) / 12/12 (U1) |
+| MTP `spec_accept_length` | **3.3** end-of-U3 soak (U2 was 3.73 after GSM8K) |
 | GSM8K, n=200 first official test, thinking off | **193/200 (96.5%)** |
 | GSM8K, n=20, thinking off (August) | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
@@ -322,9 +369,9 @@ would suggest.
 | — irrelevance / live_irrelevance | 80.0% / **30.0%** |
 | invalid tool calls, ~600 tool turns total | **0** |
 
-U2 quality 11/12 is `effort_thinking_off` answering `25` instead of `24` at
-temperature 0. Math `12×17`, tools, vision and multi-turn fact passed. GSM8K
-n=200 is the expanded gate for that miss.
+U3 and U2 quality 11/12 is `effort_thinking_off` at temperature 0 (U3 answered
+`28`, U2 answered `25`, expected `24`). Math `12×17`, tools, vision and multi-turn fact passed. GSM8K
+n=200 is the expanded gate for that miss and was last run on U2.
 
 `live_irrelevance` at 30% is the one weak spot: the model reaches for a tool when
 the right move is to decline. Curated `irrelevance` is 80%, so it is the harder
@@ -382,3 +429,4 @@ no surviving explanation, it is not a tuning lead, and it is not an argument for
 - Model: Qwen / Alibaba. NVFP4: [RadixArk](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4).
 - Engine: [SGLang](https://github.com/sgl-project/sglang) (`qwen4_exp`).
 - PLE mmap and SM121 QSA Triton backport: adapted from [hashd1ve/qwen38-flash-next-one-dgx-spark](https://github.com/hashd1ve/qwen38-flash-next-one-dgx-spark) (MIT) and [sglang#36845](https://github.com/sgl-project/sglang/pull/36845) (Apache-2.0).
+- Native PLE file backend: [sglang#37068](https://github.com/sgl-project/sglang/pull/37068) with [sglang#38123](https://github.com/sgl-project/sglang/pull/38123). Recipe filename reuse: `patches/ple_file_compat.py`.

@@ -15,6 +15,9 @@ sgl-project/sglang#36845 (Apache-2.0; KDA-1.5 provenance in that package).
 patches/replayssm_ple_commit.py isolates the PLE-state commit from
 sglang#37794 (Apache-2.0). It does not include that PR's NGRAM feature.
 
+patches/ple_file_compat.py reuses this recipe's existing PLE backing-file
+name with the native file backend from sglang#37068 / #38123 (Apache-2.0).
+
 See those files for notices. The SM121 SDPA intercept drop
 (patches/qsa_drop_sm121_sdpa.py) is only needed if the base image injected
 a PyTorch SDPA fallback in front of the varlen decoder.

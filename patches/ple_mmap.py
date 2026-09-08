@@ -102,6 +102,9 @@ def main(path: str) -> int:
     if "_alloc_ple_table" in src:
         print("ALREADY PATCHED:", path)
         return 0
+    if "allocate_ple_host_table" in src:
+        print("NATIVE FILE BACKEND (skip mmap overlay):", path)
+        return 0
 
     n = len(ORIG.findall(src))
     if n != 1:

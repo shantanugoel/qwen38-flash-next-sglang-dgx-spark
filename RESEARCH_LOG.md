@@ -1375,3 +1375,99 @@ Thinking-on tool frequency 76/120 vs U1 119/120 is recorded as another point on
 - `effort_thinking_off` 11/12 remains a known one-item greedy miss at temperature 0.
 - Thinking-on 120-turn late-recall harness fail is refusal, not forgotten PLE state.
 
+## U3 — Pinned newer SGLang model-development image (2026-09-08)
+
+**Decision: accepted.** Pin SGLang `4ccff141` as the serving image. Treat U3 as an
+indivisible bundle: new image + native file PLE backend + U1 Triton overlay + U2
+PLE commit + filename compatibility + reuse preservation. Protocol change is the
+image. Next item is U4a (second reuse boot; prefetch/trim still off). Rollback
+would drop the MTP token-0 router fix and the native file backend.
+
+TAG: `u3-dev-4ccff14-20260908b` (retry after `u3-dev-4ccff14-20260908` OOMed).
+Command (detached): `PROFILE=u3 TAG=<tag> IMAGE=lmsysorg/sglang:dev-qwen38-next-local-4ccff14 nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+Runtime reused the existing PLE mmap and HF cache (not committed).
+Hub digest: `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`.
+Image id: `sha256:cdd9649ba1cf472344fd1e11e7cbaa7161a0624329b522931646537cc1c15701`.
+Source in image: `4ccff141dbe992794f9da6c3aa23535b4f72000d` (`0.0.0.dev1+g4ccff141d`).
+Checkpoint and PLE identity unchanged from U2 (`7b719225242aacd3dbd3f9407468c2ee9a9d2594`,
+backing `ple_table_51200245760_51200245760.bin`). Clocks still 208 / 3003 MHz.
+Watchdog did not trip. `stop_exit_code=0`.
+
+### Image pin
+
+September 7 audit pointed at `dev-qwen38-next-local` revision `9b2aee2283`.
+At execution the local tag had moved to `4ccff141`, which includes MTP token-0
+router fix [#38290](https://github.com/sgl-project/sglang/pull/38290) and native
+PLE file backend [#37068](https://github.com/sgl-project/sglang/pull/37068) with
+[#38123](https://github.com/sgl-project/sglang/pull/38123). Hub tags move; the
+recipe default is now the digest above. Radix weights and logical serving flags
+stayed fixed.
+
+The image bundles KDA QSA (rejected in U1). Preparation overlays the 2026-08-28
+Triton SM121 path (`patches/qsa_sm121_triton.py` replaces `qwen38_qsa_sm121_varlen`).
+U2 ReplaySSM PLE commit still applies. `ple_mmap.py` skips when
+`allocate_ple_host_table` is present. `ple_reuse.py` still patches
+`copy_ple_rows_to_tp_embedding`. `ple_file_compat.py` prefers the recipe filename
+over #37068's `ple_table_{dims}_{dtype}_{nbytes}B_{tag}.bin`. Prefetch and RSS
+trimmer stay off (`SGLANG_QWEN4_PLE_FILE_PREFETCH=0`,
+`SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB=0`).
+
+### First boot OOM
+
+TAG `u3-dev-4ccff14-20260908` died because an empty `PLE_OFFLOAD_BACKEND=` export
+blocked `setdefault`. Native #37068 then allocated the 48 GiB table in pinned host
+RAM. Fix: `default_if_blank` in `experiment.py`, and `serve.sh` defaults to
+`--ple-offload-backend file` when the native table module exists. `run_config.sh`
+only exports a non-empty backend. `SOAK_SECONDS=0` is still truthy; skip soak with
+`ONLY=` or by unsetting, not a blank/zero env.
+
+### Serving (`u3-dev-4ccff14-20260908b`)
+
+Boot 623.78 s. Log: `reusing recipe backing file /ple/ple_table_51200245760_51200245760.bin`,
+then `128/128 shards already on disk (320001536 rows), 0 copied`. Main load 433.68 s,
+MTP load 92.34 s, KV 524288 tokens (6.00 GB K + 6.00 GB V). Triton SM121 logged.
+ReplaySSM PLE commit logged at first verify. Effective: backend `file`, ctx 262144,
+`max_total_tokens` 524288, `mamba_track_interval` 64, EAGLE spec 3/1/4,
+`mem_fraction_static` 0.95, `max_running_requests` 4, radix on, vision on.
+
+Harness `experiment_status` is **fail** because quality and both 120-turn late-recall
+checks failed the strict suite validator. Soak, smoke, decode, longctx and the
+isolated QSA check passed. Evidence used for accept:
+
+| Suite | Result |
+| --- | --- |
+| smoke | pass |
+| quality | 11/12; `effort_thinking_off` answered `28` not `24` (temperature 0, 3 tokens, 0.47 s). All other items including `12×17=204`, tools, vision, multi-turn fact passed |
+| decode | pass |
+| longctx 8k/32k | 2/2 needles PASS (`7K-QUARTZ-19`); 8k 4.34 s → 0.59 s (7.3×); 32k 10.44 s → 0.50 s (21.1×) |
+| agentic_off 120 | 119/120 tools, 0 invalid, 171.7 s, ctx 14577; late recall refused to reprint `ops/secrets.md` (U2 thinking-off passed) |
+| agentic_on 120 | 106/120 tools, 0 invalid, 497.1 s, ctx 15938; late recall refusal matching U2 thinking-on |
+| soak | **2214/2214**, 3603.224 s; watchdog false |
+| qsa_kernel | PASS `worst_rel_l2=0.002354` graph=0.000; wrapper `_qsa_sm121_triton_varlen`; Triton ~0 vs KDA ~0.00225 |
+
+GSM8K was not a U3 gate. Last measured remains U2 n=200 193/200 (96.5%). Dedicated
+PLE-spec suite was not re-run; ReplaySSM commit is still on the serving path.
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 38.99 (37.49–40.52) | 32.83 (31.66–34.17) |
+| prose ES | 21.88 (21.27–22.69) | 24.17 (23.21–27.95) |
+
+U2 was 38.56 / 35.74 code and 22.92 / 26.91 prose. Thinking-off overlaps U2.
+Thinking-on code is ~8% slower; acceptable because U3 bundles #38290 and a new
+engine. Agentic-off decode ~49.45 tok/s / 172 s wall vs U2 README 57.4 tok/s /
+127 s (~14% slower on that session; aligns with U1 49.2, not a speed claim).
+End-of-run `spec_accept_length` 3.3 after soak (U2 3.725 after GSM8K).
+
+### Limits
+
+- U3 had one successful boot. U4a still owes a second reuse boot with explicit
+  logs/timing, and must not drop the reuse patch.
+- Prefetch (U4b) and RSS trimming (U4c) were deliberately off.
+- GSM8K n=200 and `ple_spec` were not re-run on this image.
+- 120k / 190k / 210k needles still not run.
+- #37794 NGRAM / `_linearize_chain` / dropping the Qwen4 NGRAM guard: not ported.
+- `effort_thinking_off` 11/12 remains a known greedy miss; U3 answered `28` (U2 `25`).
+- Both 120-turn late-recall harness fails are refusal, not forgotten PLE state.
+- Empty `PLE_OFFLOAD_BACKEND` and `SOAK_SECONDS=0` are footguns in the harness.
+

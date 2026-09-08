@@ -292,6 +292,50 @@ class QsaPatchTests(unittest.TestCase):
             wide.write_text('if not (is_sm100_supported() or is_sm120_supported()):\n' + src)
             self.assertEqual(mod.main(str(wide)), 1)
 
+    def test_triton_replaces_bundled_kda_route(self):
+        spec = importlib.util.spec_from_file_location(
+            'qsa_sm121_triton', ROOT / 'patches/qsa_sm121_triton.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = ('from sglang.srt.utils import is_sm121\n'
+               + mod.KDA_BUNDLED
+               + '    try:\n        from flash_attn import flash_attn_varlen_func\n')
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'backend.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            patched = path.read_text()
+            self.assertIn('_qsa_sm121_triton_varlen', patched)
+            self.assertIn('qsa.sm121_varlen', patched)
+            self.assertNotIn('qwen38_qsa_sm121_varlen', patched)
+            self.assertEqual(mod.main(str(path)), 0)
+
+    def test_u3_profile_adds_soak(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            def fake_bounded(args, log, seconds, env=None, guard=None):
+                name = Path(env['OUT']).stem
+                if name == 'smoke':
+                    return 0
+                payload = {'results': [{'pass': True, 'needle_pass': True}], 'failed': 0}
+                if name == 'decode':
+                    payload = {'results': [
+                        {'mode': 'thinking_on', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                        {'mode': 'thinking_off', 'tasks': {'c': {'samples': [{'completion_tokens': 1, 'seconds': 1}]}}},
+                    ]}
+                elif name == 'soak':
+                    payload = {'results': [{'pass': True}], 'failed': 0,
+                               'summary': {'ok': 1, 'errors': 0, 'requests': 1,
+                                           'seconds': 1.0, 'target_seconds': 1}}
+                Path(env['OUT']).write_text(json.dumps(payload))
+                return 0
+            with patch('experiment.bounded', side_effect=fake_bounded):
+                self.assertEqual(suites(out, {
+                    'QUICK': '1', 'SUITE_TIMEOUT': '1', 'SOAK_SECONDS': '1',
+                }), 0)
+            names = [r['name'] for r in json.loads((out / 'suite_status.json').read_text())['suites']]
+            self.assertEqual(names, ['smoke', 'quality', 'decode', 'soak'])
+
     def test_only_runs_named_suites(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)
@@ -382,6 +426,70 @@ class ReplaySsmPleCommitTests(unittest.TestCase):
         self.assertEqual(commit(3), [11, 12, 13])  # all drafts accepted
         self.assertEqual(commit(0), [1, 2, 10])    # all drafts rejected, bonus only
         self.assertEqual(prompt, [1, 2, 3])        # freeze bug leaves prompt n-grams
+
+
+class NativePleAndQsaDropTests(unittest.TestCase):
+    def test_mmap_skips_native_file_backend(self):
+        spec = importlib.util.spec_from_file_location(
+            'ple_mmap', ROOT / 'patches/ple_mmap.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'qwen4_exp.py'
+            path.write_text('def allocate_ple_host_table():\n    return None\n')
+            self.assertEqual(mod.main(str(path)), 0)
+            self.assertNotIn('_alloc_ple_table', path.read_text())
+
+    def test_reuse_applies_without_mmap_helper(self):
+        spec = importlib.util.spec_from_file_location(
+            'ple_reuse', ROOT / 'patches/ple_reuse.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = ('def allocate_ple_host_table():\n    return None\n'
+               + 'class Qwen4ExpPinnedHostEmbedding(VocabParallelEmbedding):\n'
+               + '    pass\n'
+               + mod.ORIG
+               + '        self.logged_params = loaded_params\n')
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'qwen4_exp.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            self.assertIn('_ple_shard_matches', path.read_text())
+
+    def test_file_compat_prefers_recipe_backing_name(self):
+        spec = importlib.util.spec_from_file_location(
+            'ple_file_compat', ROOT / 'patches/ple_file_compat.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = 'def allocate_ple_host_table():\n    pass\n' + mod.ORIG
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'qwen4_exp_ple_table.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            patched = path.read_text()
+            self.assertIn('reusing recipe backing file', patched)
+            self.assertIn('ple_table_%d_%d.bin', patched)
+            self.assertEqual(mod.main(str(path)), 0)
+
+    def test_qsa_drop_is_noop_when_is_sm121_is_only_the_kernel_gate(self):
+        spec = importlib.util.spec_from_file_location(
+            'qsa_drop', ROOT / 'patches/qsa_drop_sm121_sdpa.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        src = '    if is_sm121():\n        return qwen38_qsa_sm121_varlen\n'
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'backend.py'
+            path.write_text(src)
+            self.assertEqual(mod.main(str(path)), 0)
+            self.assertEqual(path.read_text(), src)
+
+    def test_blank_env_does_not_block_u3_file_backend(self):
+        from experiment import default_if_blank
+        env = {'PLE_OFFLOAD_BACKEND': ''}
+        default_if_blank(env, 'PLE_OFFLOAD_BACKEND', 'file')
+        self.assertEqual(env['PLE_OFFLOAD_BACKEND'], 'file')
+        default_if_blank(env, 'PLE_OFFLOAD_BACKEND', 'pinned')
+        self.assertEqual(env['PLE_OFFLOAD_BACKEND'], 'file')
 
 
 if __name__ == '__main__': unittest.main()
