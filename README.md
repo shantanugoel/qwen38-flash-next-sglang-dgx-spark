@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a, U6, U7a, U7b and U8 are done; U4b/U4c/U5a, the U7b 2048 chunk candidate and the U8a QSA prefill overlay were rejected; U5b skipped; U8b is not applicable to this checkpoint.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a and U6–U9 are done; U4b/U4c/U5a, the U7b 2048 chunk candidate, the U8a QSA prefill overlay and U9 BF16 recurrent state were rejected; U5b skipped; U8b is not applicable to this checkpoint.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -460,6 +460,7 @@ sandbox, and a mock tool backend measures the harness, not the model.
 | #36845 KDA SM121 overlay on this image | **Rejected for serving.** Isolated rel-L2 ≤ 0.0024 and CUDA-graph replay passed; a 32k needle then returned 64× `!`. Triton-only on the same stack passed |
 | #37794 NGRAM on Qwen4-Exp | **Not ported.** U2 took only the ReplaySSM PLE-commit hunk. `_prepare_ple_batch` still refuses NGRAM |
 | #38209 QSA prefill selection (U8a) | **Rejected for serving, kept opt-in** (`QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh`). Correct here — its own kernel tests pass 87/88, the one failure being U1's deliberate KDA replacement — but 32k cold TTFT 10.119 vs 10.125 s, 128k 42.00 vs 42.20 s, mixed-load p95 26.09 vs 26.20 s. The 4-stream aggregate looked +12% until per-stream medians came out identical (34.48 vs 34.35) with c=2 down 8.5% |
+| BF16 recurrent state (U9) | **Rejected.** Halves the SSM pool (2.21 → 1.11 GB, +1.1 GiB free) but KV stays 524288 tokens because `MAX_TOTAL` binds, so the headroom is unservable; prefill/mixed-load/decode flat; the repeated-sample probe fell 6/20 → 0/20, matching SGLang's own warning that a non-fp32 state re-quantizes the ReplaySSM committed state at every flush |
 | #38170 b12x NVFP4 GEMM (U8b) | **Not applicable.** All 221184 NVFP4 scale tensors in this checkpoint are routed-MoE experts; attention, shared experts, gates, MTP and `lm_head` are BF16, so the dense `mm_fp4` path this PR retargets is never called |
 
 ### Vision

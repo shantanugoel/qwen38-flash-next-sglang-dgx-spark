@@ -275,11 +275,21 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U9 — Optional BF16 recurrent state
 
-- [ ] Confirm support in the corrected kernel/cache strategy. Hold BF16 KV fixed;
-  compare FP32/BF16 state at 1/2/4 streams and 120 turns. Existing SGLang-family
-  no-op evidence lowers priority; vLLM gains are not proof here.
-- [ ] Require expanded quality plus a measurable serving/memory gain. Keep FP32
-  if inconclusive or regressed. Log decision and commit.
+- [x] Support confirmed in the pinned image: the flag reaches the state dtype and
+  SM121 keeps `linear_attn_decode_backend=triton`, so BF16 unlocks no kernel here
+  (the FlashInfer GDN decode that needs bf16 is SM100+ only). With our accepted
+  `--enable-gdn-replayssm-spec`, the engine logs that a non-fp32 state
+  re-quantizes the committed state each commit/flush and may drift.
+- [x] **Rejected; `--mamba-ssm-dtype` stays `float32`.** TAG `u9-bf16-ssm-20260908`
+  vs matched FP32 `u8a-baseline-20260908`. State pool 2.21 -> 1.11 GB
+  (+1.13 GB free GPU, +1.12 GiB host MemAvailable) but `max_total_num_tokens`
+  stays 524288 because `MAX_TOTAL` binds, so the headroom is unservable.
+  Prefill/mixed-load flat (32k 10.148 vs 10.125 s; p95 26.186 vs 26.201 s),
+  decode directions disagree within noise, and the repeated-sample probe fell
+  from 6/20 to **0/20** on the one deterministic case — suggestive of the logged
+  drift, not a gate. Expanded quality (GSM8K 200, 120-turn) was deliberately not
+  bought: with no serving gain it cannot change the outcome. Reopen if a later
+  item makes the freed 1.1 GB usable. See RESEARCH_LOG U9.
 
 ### U10 — Optional NVIDIA checkpoint comparison
 

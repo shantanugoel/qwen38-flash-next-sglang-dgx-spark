@@ -2191,3 +2191,92 @@ The PR is unmerged; if a later engine bundle routes routed-MoE FP4 through
 this item, per the plan's instruction not to chase releases independently.
 
 Rollback: nothing to roll back. Next item: U9.
+
+
+## U9 — BF16 recurrent (SSM) state (2026-09-08)
+
+**Decision: rejected. `--mamba-ssm-dtype` stays `float32`.** BF16 halves the
+state pool as advertised, but buys nothing servable on this host, and the one
+repeated-sample quality measurement moved the wrong way.
+
+Support confirmed first, in the pinned image rather than from vLLM reports:
+`configs/mamba_utils.py` maps the flag to the state dtype, and `server_args.py`
+accepts `float32|bfloat16|float16`. Two interactions matter here. First, the
+SM100+ FlashInfer GDN decode default that *requires* bf16 does not apply: this
+is SM121 and `linear_attn_decode_backend` stays `triton`, so BF16 buys no
+kernel change on GB10. Second, `--enable-linear-replayssm-spec` (our accepted
+U2 correctness fix, via the `--enable-gdn-replayssm-spec` alias) logs at boot,
+verbatim, with BF16 selected:
+
+    --enable-linear-replayssm-spec with --mamba-ssm-dtype=bfloat16: the
+    closed-loop fold re-quantizes the committed state each commit/flush (fp32
+    keeps it bit-exact to the fp32 recurrent baseline), so it may drift over
+    long sequences. Validate accuracy for your model.
+
+So BF16 is not a free precision knob here: it trades against the fold that U2
+accepted for correctness.
+
+Matched A/B, one variable (`MAMBA_SSM_DTYPE`), same image digest, revision, PLE
+identity, prompts, sampling, thinking modes and suite set. Baseline is the
+FP32 run measured immediately before it, `u8a-baseline-20260908`:
+
+    TAG=u9-bf16-ssm-20260908 PROFILE=u3 PREFILL=4096 MAMBA_SSM_DTYPE=bfloat16 \
+      SIZES=8k,32k,128k PREFILL_BENCH=1 N=3 STREAMS=1 MIXEDLOAD=1 \
+      EFFORT_PROBE=1 EFFORT_PROBE_N=20 \
+      ONLY=smoke,prefill,quality,effort_probe,decode,streams,mixedload,longctx
+
+| Metric | FP32 | BF16 | delta |
+| --- | ---: | ---: | ---: |
+| ssm_state pool | 2.21 GB | **1.11 GB** | -1.10 GB |
+| conv_state pool | 0.04 GB | 0.04 GB | — |
+| available_gpu_mem after alloc | 13.22 GB | 14.35 GB | +1.13 GB |
+| Min host MemAvailable / MemFree GiB | 10.33 / 0.96 | 11.45 / 0.99 | +1.12 / +0.03 |
+| `max_total_num_tokens` | 524288 | 524288 | **unchanged** |
+| 32k cold TTFT s | 10.125 | 10.148 | +0.2% |
+| 128k cold TTFT s | 42.196 | 42.724 | +1.3% |
+| 8k PLE-warm TTFT s | 2.689 | 2.700 | +0.4% |
+| Decode off code / prose tok/s | 46.73 / 22.40 | 45.96 / 20.76 | -1.6% / -7.3% |
+| Decode on code / prose tok/s | 38.78 / 25.42 | 40.01 / 25.81 | +3.2% / +1.5% |
+| Streams c=1 / 2 / 4 aggregate tok/s | 47.01 / 86.58 / 101.50 | 49.94 / 77.48 / 118.96 | +6.2 / -10.5 / +17.2% |
+| Mixed p95 chunk gap s | 26.201 | 26.186 | -0.1% |
+| Mixed prefill TTFT s | 28.429 | 28.360 | -0.2% |
+| Boot s | 569.54 | 591.35 | +3.8% |
+| Needles 8k/32k/128k; prefill 12/12 | pass | pass | — |
+| Quality | 11/12 (`28`) | 11/12 (`28`) | same unstable case |
+| **effort_probe 20x** | 6/20 (`28`x10, `24`x6, `25`x4) | **0/20** (`28`x17, `25`x3) | **worse** |
+| spec_accept_length | 1.85 | 1.725 | -6.8% |
+
+Reading, in the order that decides it:
+
+1. **No serving gain.** Prefill, mixed load and single-stream decode are flat or
+   slightly worse; the two decode directions disagree and their ranges overlap.
+2. **The memory gain is real but unservable.** 1.10 GB comes back, and KV stays
+   at 524288 tokens because `MAX_TOTAL` binds — U5a already established that.
+   Nothing in the accepted recipe converts idle headroom into capacity, so the
+   plan's "measurable serving/memory gain" is only half met: the memory moved,
+   the service did not.
+3. **The only repeated-sample quality metric moved the wrong way.** The probe
+   resends one deterministic-sampling case 20x in-boot. FP32 scored 9/20, 6/20
+   and 6/20 across three boots; BF16 scored 0/20, and its wrong answers
+   concentrated on `28` (17 of 20). This is *suggestive, not established*: one
+   prompt, one BF16 boot, and the case is unstable by construction. It is not a
+   quality gate. But it points the same direction as the engine's own drift
+   warning, and there is no gain on the other side of the trade to justify
+   spending an expanded quality gate to resolve it.
+4. Streams reproduce the U8a pattern (c=4 up, c=2 down, wide ranges) under a
+   completely unrelated change, which is further evidence that the 4-stream
+   aggregate is boot-level noise on this host and not a discriminator at the 5%
+   level. Per-stream medians: 34.35 (FP32) vs 36.00 (BF16).
+
+Not run, deliberately: GSM8K n=200 paired, 120-turn agentic in both thinking
+modes, and 190k/210k needles. The plan requires expanded quality *plus* a
+serving/memory gain before accepting a state-precision change; with no serving
+gain and unservable headroom, buying that evidence would not change the outcome.
+If a future item makes the freed 1.1 GB useful — raising `MAX_TOTAL` above
+524288, or a KV-precision change that lifts the binding constraint — reopen U9
+and run the full expanded gate then. Uncertainty: three repeats per metric, one
+boot per configuration, one host.
+
+Rollback: none applied at the default level; `MAMBA_SSM_DTYPE` was per-run
+environment only and `scripts/serve.sh` still defaults to `float32`. The FP32
+baseline run that preceded this one is the health check. Next item: U10.
