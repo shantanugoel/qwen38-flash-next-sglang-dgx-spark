@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U4a and U6 are accepted; U4b/U4c/U5a were rejected; U5b skipped.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a, U6 and U7a are accepted; U4b/U4c/U5a were rejected; U5b skipped.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv

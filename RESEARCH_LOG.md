@@ -1808,28 +1808,55 @@ measured.
 
 Rollback: `SPECULATIVE_TOKEN_MAP=off`. Next item: U7.
 
-## U7a audit — CUDA graph coverage (2026-09-08)
+## U7a — CUDA graph coverage (2026-09-08)
 
-**Decision pending measurement.** Image `4ccff141` / U6 occupant already captures
-only reachable MTP batch sizes. U6 `boot-facts.txt`:
+**Decision: accepted current coverage; reject trimming.** With `MAX_RUNNING=4`,
+MTP already captures only reachable batch sizes `bs=[1,2,3,4]`. Setting
+`CUDA_GRAPH_MAX_BS=4` is a no-op vs the pool-size clamp. Dropping 2 or 3 would
+lose coverage; disabling padding is out of scope. Serving defaults stay unset
+(`cuda_graph_max_bs_decode=None`, `cuda_graph_bs_decode=None`). Padding on;
+prefill graphs stay disabled.
 
-- `max_running_requests=4`, `cuda_graph_max_bs_decode=None` (stock decode `bs`
-  list still goes to 256 in `CudaGraphConfig`).
-- `get_batch_sizes_to_capture` clamps to `req_to_token_pool.size` (= 4).
-- Target verify: `num_tokens_per_req=4`, `bs=[1, 2, 3, 4]`, 6.52 s, 0.78 GiB.
-- Draft decode: `num_tokens_per_req=1`, `bs=[1, 2, 3, 4]`, 4.35 s, 0.57 GiB.
-- Draft extend: `num_tokens_per_req=4`, `bs=[1, 2, 3, 4]`, 0.67 s, 0.24 GiB.
-- Prefill CUDA graphs disabled (`--disable-prefill-cuda-graph`). Padding on.
+Image `4ccff141` /
+`sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`.
+TAG `u7a-streams-baseline-20260908` (`PROFILE=u3 STREAMS=1 QUICK=1`, soak off).
+Last accepted config otherwise (U6 64k token map, native file PLE, prefetch 0,
+RSS budget 0). Stock `CudaGraphConfig.decode.bs` still lists 1…256; capture is
+clamped by `get_batch_sizes_to_capture` to `req_to_token_pool.size` (= 4).
 
-There is no excess capture to trim without losing 2- or 3-stream coverage or
-disabling padding (U7a forbids both). `CUDA_GRAPH_MAX_BS=4` would be a no-op vs
-the pool-size clamp. `CUDA_GRAPH_BS` is wired for later explicit lists; default
-stays unset so raising `MAX_RUNNING` still captures the new reachable sizes.
+| | U6 (last accepted) | U7a |
+| --- | ---: | ---: |
+| boot s | 564 / 556 | 584 |
+| PLE | 128/128, 0 copied | 128/128, 0 copied |
+| KV tokens | 524288 | 524288 |
+| capture bs | [1, 2, 3, 4] | [1, 2, 3, 4] |
+| verify capture | 6.52 s / 0.78 GiB | 7.42 s / 1.78 GiB |
+| draft decode capture | 4.35 s / 0.57 GiB | 3.20 s / 0.32 GiB |
+| draft extend capture | 0.67 s / 0.24 GiB | 0.68 s / 0.23 GiB |
+| code off median | 47.59 / 47.57 | 49.69 (46.94–50.51) |
+| prose off median | 21.12 / 22.13 | 20.72 (18.80–22.85) |
+| code on median | 35.09 / 42.02 | 37.65 (35.29–40.19) |
+| prose on median | 25.17 / 28.03 | 27.27 (25.02–30.69) |
+| quality | 12/12 | **12/12** |
+| spec_accept_length | 3.85 | 3.77 |
 
-Harness for the remaining U7a/U7b measurements: `bench/streams.py` (1/2/4-stream
-aggregate tok/s) and `bench/mixedload.py` (64k prefill during two decodes; report
-chunk-gap percentiles and tokens/chunk). Opt-in via `STREAMS=1` / `MIXEDLOAD=1`.
-Primary U7a metric after the next boot: median aggregate tok/s at c=1/2/4 vs
-single-stream decode, plus boot seconds and capture lines.
+1/2/4-stream (thinking off, same code prompt as `bench/decode.py`, n=3):
+
+| concurrency | median aggregate tok/s | per-stream |
+| ---: | ---: | ---: |
+| 1 | 48.53 (48.49–48.67) | 48.55 |
+| 2 | 77.74 (71.12–79.65) | 41.84 |
+| 4 | 104.38 (100.61–130.69) | 34.18 |
+
+Primary metric was not a speed delta: there is no excess graph to trim. Stream
+aggregates scale (c=4 ≈ 2.15× c=1) without padding-off or missing buckets.
+Single-stream code-off 49.69 is inside the U6 confirm band on the high side; not
+claimed as a U7a gain. QUICK only; 120-turn not rerun. Capture mem (verify 0.78
+→ 1.78 GiB) is boot-to-boot noise, not a flag change.
+
+`CUDA_GRAPH_BS` remains available for later explicit lists. Leave it unset so
+raising `MAX_RUNNING` still captures the new reachable sizes.
+
+Rollback: none (no serving-flag change). Next item: U7b.
 
 

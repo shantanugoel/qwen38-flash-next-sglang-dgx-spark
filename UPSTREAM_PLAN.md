@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U4a and U6 accepted; U4b/U4c/U5a rejected; U5b skipped; U7–U12 not finished**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a, U6 and U7a accepted; U4b/U4c/U5a rejected; U5b skipped; U7b–U12 not finished**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -18,7 +18,9 @@ across a one-hour growing-context soak, so the trimmer never fired. Default stay
 day: `max_total_num_tokens` stayed 524288. U5b skipped (MAX_TOTAL already binds).
 U6 was accepted the same day: 64k NEXTN `--speculative-token-map` is now the
 serving default (thinking-off code 40.29 → 47.6 tok/s on two launches). Further
-map sizes were not measured. Later items remain unexecuted.
+map sizes were not measured. U7a was accepted the same day: MTP graphs already
+capture `bs=[1,2,3,4]` under `MAX_RUNNING=4`; no trim. 1/2/4-stream baseline
+logged. Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
 and memory headroom on one DGX Spark. Keep only demonstrated improvements.
@@ -209,13 +211,11 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U7 — Graph coverage and mixed-load chunk sizing
 
-- [ ] U7a: audit actual reachable draft/verify sizes and graph replay. Trim excess
+- [x] U7a: audit actual reachable draft/verify sizes and graph replay. Trim excess
   captures without disabling padding or losing coverage. Measure boot/memory
   and 1/2/4-stream performance. Log decision and commit.
-  **Audit (2026-09-08, U6 boot-facts):** MTP already captures verify/draft-decode/draft-extend
-  at `bs=[1,2,3,4]` because `max_running_requests=4` clamps `get_batch_sizes_to_capture`.
-  Prefill graphs stay disabled. Padding stays on. Harness: `STREAMS=1` / `MIXEDLOAD=1`.
-  Measurement of 1/2/4-stream performance is the remaining U7a item; do not trim 2/3.
+  TAG `u7a-streams-baseline-20260908`. Capture already `bs=[1,2,3,4]`; no trim.
+  Streams c=1/2/4 aggregate 48.53 / 77.74 / 104.38 tok/s. Defaults unset. Accepted.
 - [ ] U7b: hold graphs fixed; compare prefill 4096 to 2048/1024, optionally 8192,
   one candidate and commit at a time. Measure cold TTFT, aggregate throughput,
   and p50/p95/p99 streamed-chunk gaps when a 64k prefill arrives during two
