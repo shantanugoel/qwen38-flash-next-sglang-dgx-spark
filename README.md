@@ -369,36 +369,44 @@ overlay on this same image failed that 32k needle with 64× token id 0.
 
 120 turns, one tool call per turn, growing context, `bench/agentic.py`.
 
-Measured on the U3 shipped config (`u3-dev-4ccff14-20260908b`), thinking **off**:
+Measured on the **current accepted default** (Radix + U6 draft map,
+`u10-radix-arith-agentic-20260908`), thinking **off**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.57 s | 49.45 tok/s | 96.2% | 2.7k |
-| 41–80 | 0.57 s | 49.45 tok/s | 98.5% | 7.5k |
-| 81–120 | 0.57 s | 49.28 tok/s | **99.1%** | 12.2k |
+| 1–40 | 0.52 s | 68.21 tok/s | 95.6% | 2.5k |
+| 41–80 | 0.52 s | 68.34 tok/s | 98.4% | 6.7k |
+| 81–120 | 0.52 s | 68.20 tok/s | **99.0%** | 10.9k |
 
-119/120 turns emitted a tool call, **0 invalid tool calls**, 172 s wall clock,
-final context 14577 tokens. **TTFT is flat as context grows** — that is the radix
-cache absorbing the resend pattern. Decode here is tool-JSON-heavy and is not the
-code/prose table. Late recall refused to reprint the planted `ops/secrets.md`
-code; the answer still cited that file (disclosure, not forgotten state). U2
-thinking-off late recall passed.
+119/120 turns emitted a tool call, **0 invalid tool calls**, 118 s wall clock,
+final context 13030 tokens. **TTFT and decode are flat as context grows** — that
+is the radix cache absorbing the resend pattern. Decode here is tool-JSON-heavy
+and is not the code/prose table. Late recall refused to reprint the planted
+`ops/secrets.md` code, quoting that document's own "Do not repeat unless asked"
+line; recall was intact (disclosure, not forgotten state), as in U3 and U5a.
 
 Same session, thinking **on**:
 
 | turns | TTFT | decode | cache hit | context |
 | --- | ---: | ---: | ---: | ---: |
-| 1–40 | 0.39 s | 33.31 tok/s | 94.5% | 2.8k |
-| 41–80 | 0.46 s | 30.97 tok/s | 96.4% | 7.7k |
-| 81–120 | 0.42 s | 29.95 tok/s | **98.7%** | 12.5k |
+| 1–40 | 0.39 s | 36.40 tok/s | 95.2% | 3.5k |
+| 41–80 | 0.41 s | 39.25 tok/s | 97.0% | 8.4k |
+| 81–120 | 0.37 s | 31.04 tok/s | **98.8%** | 13.4k |
 
-0 invalid tool calls, 497 s wall clock. Tool frequency 106/120 this run (U2 was
-76/120, U1 119/120). Late recall was again a disclosure-style refusal.
+101/120 tool turns, 0 invalid tool calls, 418 s wall clock, final context 15882
+tokens. Late recall **passed** outright this run.
 
-Repeated 40-turn runs land at 48–52 tok/s decode, 0.56–0.60 s TTFT and
-97.3–97.5% cache hit, with **0 invalid tool calls** every time.
+Previous U3 shipped config (`u3-dev-4ccff14-20260908b`) on the same suite, for
+comparison: thinking off 0.57 s TTFT / 49.45 / 49.45 / 49.28 tok/s, 96.2 → 99.1%
+cache, 172 s; thinking on 0.39–0.46 s / 33.31 / 30.97 / 29.95 tok/s, 94.5 →
+98.7% cache, 497 s, 106/120 tool turns. The decode gain is the U6 64k draft
+vocabulary; TTFT and cache behaviour are unchanged.
 
-### Decode
+Repeated 40-turn runs on the pre-U6 stack landed at 48–52 tok/s decode,
+0.56–0.60 s TTFT and 97.3–97.5% cache hit, with **0 invalid tool calls** every
+time.
+
+### Decode (August 28 baseline recipe — superseded by the U6 table above)
 
 | | thinking off | thinking on |
 | --- | ---: | ---: |
@@ -414,7 +422,7 @@ would suggest.
 `spec_accept_length` is the more stable evidence: **3.80 without the flag,
 3.93–3.95 with it**, out of a 4-token draft, consistent across every run.
 
-### Long context
+### Long context (August 28 baseline recipe; 128k and current TTFT are in the U6/U3 blocks above)
 
 | | |
 | --- | ---: |
@@ -427,19 +435,29 @@ would suggest.
 
 | | |
 | --- | ---: |
-| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **11/12** (U3 and U2) / 12/12 (U1) |
+| smoke suite (math, tools, executed code, multi-turn, **vision**, effort) | **12/12** on the current U6 default (both boots); 11/12 on U3 and U2, 12/12 on U1 |
 | MTP `spec_accept_length` | **3.3** end-of-U3 soak (U2 was 3.73 after GSM8K) |
 | GSM8K, n=200 current accepted default, thinking off | **194/200 (97.0%)** (U10; U2 was 193/200) |
 | GSM8K, n=20, thinking off (August) | **19/20 (95%)** |
 | BFCL fixed subset, 80 single-turn cases | **72.5%** |
 | — simple / multiple / parallel | 86.7% / 73.3% / 66.7% |
 | — irrelevance / live_irrelevance | 80.0% / **30.0%** |
+| arithmetic class probe, 20 prompts x 10, thinking off (U10) | **155/200 (77.5%)** — 15 prompts 10/10, 4 prompts 0/10 |
 | invalid tool calls, ~600 tool turns total | **0** |
 
 U3 and U2 quality 11/12 is `effort_thinking_off` at temperature 0 (U3 answered
 `28`, U2 answered `25`, expected `24`). Math `12×17`, tools, vision and multi-turn fact passed. GSM8K
 n=200 was rerun on the current accepted Radix default during U10 and scored
 194/200; the paired NVIDIA checkpoint scored the same.
+
+The arithmetic class probe (`bench/arith_probe.py`, 20 same-shaped prompts x 10
+repeats at temperature 0) separates two different things: 15 prompts are answered
+10/10, but **4 prompts are wrong 10/10 with a stable wrong answer** — with
+thinking off this model asserts a short arithmetic result without deriving it, so
+about a fifth of that prompt class is deterministically wrong rather than noisy.
+Only the `effort_thinking_off` case is genuinely unstable (5/10 here). That is a
+property of the model with thinking off, not of the quantization or this recipe:
+the NVIDIA pack fails the same four prompts with the same wrong answers.
 
 `live_irrelevance` at 30% is the one weak spot: the model reaches for a tool when
 the right move is to decline. Curated `irrelevance` is 80%, so it is the harder
