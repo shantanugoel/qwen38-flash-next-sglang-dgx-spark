@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next on one DGX Spark (SGLang)
 
-**September 2026 upstream campaign:** **U0–U3 are accepted.** Serving image is
+**September 2026 upstream campaign:** **U0–U4a are accepted.** Serving image is
 SGLang `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`).
 Sparse decode on GB10 uses the 2026-08-28 Triton kernel from [SGLang #36845](https://github.com/sgl-project/sglang/pull/36845),
 overlaid on this image's bundled KDA QSA (rejected in U1). ReplaySSM verify commits PLE n-gram/short-conv
@@ -211,9 +211,11 @@ U1 Triton overlays bundled KDA QSA. U2 ReplaySSM PLE commit stays. Prefetch and
 RSS trimming off. Filename compat reuses `ple_table_51200245760_51200245760.bin`.
 
 Boot 624 s, PLE `128/128 shards already on disk`, Triton SM121 QSA, ReplaySSM PLE
-commit on the serving path. Vision, tools, executed code, 8k/32k needles all pass.
-0 invalid tool calls. One-hour soak **2214/2214**. Isolated QSA check: Triton/wrapper
-rel-L2 ~0 vs FP32, KDA ~0.00225, CUDA-graph replay 0.000.
+commit on the serving path. U4a second reuse boot (`u4a-reuse-boot-20260908`)
+618 s, same `128/128` / 0 copied; native #37068 still rewrites the table without
+`patches/ple_reuse.py`, so that overlay stays. Vision, tools, executed code, 8k/32k
+needles all pass. 0 invalid tool calls. One-hour soak **2214/2214**. Isolated QSA
+check: Triton/wrapper rel-L2 ~0 vs FP32, KDA ~0.00225, CUDA-graph replay 0.000.
 
 Harness `experiment_status` is fail: quality 11/12 (`effort_thinking_off` answered
 `28` not `24` at temperature 0) and both 120-turn late-recall checks were

@@ -1,6 +1,6 @@
 # Upstream validation plan — September 2026
 
-Status: **U0–U3 accepted; U4–U12 not started**. This supersedes stale TODO/status and skip-list
+Status: **U0–U4a accepted; U4b–U12 not started**. This supersedes stale TODO/status and skip-list
 entries in `EXPLORATION.md` for this campaign. August measurements remain
 historical evidence. U1 was accepted on September 7 (Triton #36845 serving
 default; KDA overlay rejected on this image). U2 was accepted the same day:
@@ -8,6 +8,8 @@ ReplaySSM verify now commits PLE n-gram/short-conv state (#37794 `spec_utils`
 hunk only; NGRAM not ported). U3 was accepted on September 8: pin SGLang
 `4ccff141` (`lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`),
 native PLE file backend, U1 Triton overlay over bundled KDA, U2 PLE commit kept.
+U4a was accepted the same day: second native-file reuse boot (`128/128`, 0 copied,
+618 s); `ple_reuse.py` stays because the native loader still rewrites the table.
 Later items remain unexecuted.
 
 Objective: improve correctness first, then long-horizon agentic latency, speed,
@@ -158,15 +160,13 @@ against this endpoint; never report a TB score measured on this Spark.
 
 ### U4 — Native PLE backend, prefetch and resident-memory control
 
-- [ ] U4a: U3 already adopted native allocation from
-  [#37068](https://github.com/sgl-project/sglang/pull/37068) with
-  [#38123](https://github.com/sgl-project/sglang/pull/38123), prefetch/trimming
-  disabled, filename compat, and one successful reuse boot (`128/128` in 624 s).
-  Remaining: a second boot with explicit reuse logs/timing, and do not drop the
-  reuse patch (the native loader still rewrites the full table each boot).
-  Reconcile file names and checkpoint identity without writes under `~/ai`.
-  Skip soak (`ONLY=` / unset `SOAK_SECONDS`; `SOAK_SECONDS=0` is still truthy).
-  Log decision and commit.
+- [x] U4a: second reuse boot TAG `u4a-reuse-boot-20260908` 617.62 s. Logs:
+  `reusing recipe backing file` then `128/128 shards already on disk
+  (320001536 rows), 0 copied`. Scheduler `write_bytes` 8192 during load.
+  Native #37068 still rewrites without `ple_reuse.py`; patch kept. PLE inode
+  and sampled identity unchanged; no writes under `~/ai`. Soak skipped via
+  `ONLY=`. Fast gate: smoke/decode/longctx pass; quality 11/12 is the known
+  `effort_thinking_off` miss (`28` not `24`). Accepted. See RESEARCH_LOG U4a.
 - [ ] U4b: enable prefill page prefetch alone; measure cold/warm prefill, I/O,
   synchronization cost and decode under prefill. Log decision and commit.
 - [ ] U4c: evaluate the RSS trimmer separately with a one-hour growing-context

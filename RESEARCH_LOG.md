@@ -1461,8 +1461,7 @@ End-of-run `spec_accept_length` 3.3 after soak (U2 3.725 after GSM8K).
 
 ### Limits
 
-- U3 had one successful boot. U4a still owes a second reuse boot with explicit
-  logs/timing, and must not drop the reuse patch.
+- U3 had one successful boot. U4a later confirmed a second reuse boot; see U4a.
 - Prefetch (U4b) and RSS trimming (U4c) were deliberately off.
 - GSM8K n=200 and `ple_spec` were not re-run on this image.
 - 120k / 190k / 210k needles still not run.
@@ -1470,4 +1469,71 @@ End-of-run `spec_accept_length` 3.3 after soak (U2 3.725 after GSM8K).
 - `effort_thinking_off` 11/12 remains a known greedy miss; U3 answered `28` (U2 `25`).
 - Both 120-turn late-recall harness fails are refusal, not forgotten PLE state.
 - Empty `PLE_OFFLOAD_BACKEND` and `SOAK_SECONDS=0` are footguns in the harness.
+
+## U4a — Second native-file PLE reuse boot (2026-09-08)
+
+**Decision: accepted.** Keep `patches/ple_reuse.py` on the native file backend.
+U3 already adopted `#37068` / `#38123` allocation with filename compat and one
+`128/128` boot. This item is the required second boot with explicit reuse logs.
+The native loader still rewrites the 47.7 GiB table on every restart; dropping
+the overlay would turn a ~10 min restart into a 45–60 min read-modify-write.
+Prefetch and RSS trimming stay off until U4b/U4c. Rollback would be dropping
+the reuse overlay, which is not justified.
+
+TAG: `u4a-reuse-boot-20260908`.
+Command (detached): `PROFILE=u3 TAG=<tag> ONLY=smoke,quality,decode,longctx PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap nohup ./scripts/run_config.sh > results/run-<tag>.log 2>&1 &`.
+`ONLY=` skips soak (`SOAK_SECONDS=0` is still truthy). Image, digest, packages,
+source commit, checkpoint and PLE identity unchanged from U3. Clocks still
+208 / 3003 MHz. Watchdog did not trip. `stop_exit_code=0`.
+
+### Reuse evidence
+
+| | U3 first reuse | U4a second reuse |
+| --- | ---: | ---: |
+| docker run → `/health` 200 | 623.78 s | **617.62 s** |
+| target `Load weight end` | 433.68 s | 445.60 s |
+| MTP `Load weight end` | 92.34 s | 88.50 s |
+| shards skipped / copied | 128/128, 0 copied | **128/128, 0 copied** |
+| backing file | `ple_table_51200245760_51200245760.bin` | same inode 19924234 |
+| `write_bytes` during load | (not captured this way) | **8192** |
+
+Boot log, in order: `reusing recipe backing file /ple/ple_table_51200245760_51200245760.bin`,
+`file-backed mmap … (47.7 GiB, torch.float8_e4m3fn)`, then at 04:15:42
+`PLE table: 128/128 shards already on disk (320001536 rows), 0 copied`.
+KV 524288 tokens (6.00 GB K + 6.00 GB V). Triton SM121 logged. ReplaySSM PLE
+commit logged at first verify. Isolated QSA check: PASS `worst_rel_l2=0.002301`
+graph=0.000; wrapper `_qsa_sm121_triton_varlen`.
+
+PLE identity sample hash `a13a022a5e6f0e39bdd564a9c4483e158658b0242f85b3c2e62b1929ab18ac9d`
+matches U3. No writes under `~/ai`.
+
+### Fast gate
+
+Harness `experiment_status` is **fail** because quality failed the strict suite
+validator. That is the known greedy miss, not a reuse regression.
+
+| Suite | Result |
+| --- | --- |
+| smoke | pass |
+| quality | 11/12; `effort_thinking_off` answered `28` not `24` (temperature 0, 3 tokens, 0.46 s). Same miss as U3. All other items including `12×17=204`, tools, vision (`Yellow`), multi-turn fact passed |
+| decode | pass |
+| longctx 8k/32k | 2/2 needles PASS (`7K-QUARTZ-19`); 8k 4.36 s → 0.58 s (7.5×); 32k 10.52 s → 0.50 s (20.9×) |
+| soak | skipped by `ONLY=` |
+
+| Decode median tok/s | thinking off | thinking on |
+| --- | ---: | ---: |
+| code EN | 40.29 (38.06–40.94) | 31.96 (29.96–32.96) |
+| prose ES | 20.73 (18.74–21.11) | 24.24 (21.11–30.09) |
+
+U3 was 38.99 / 32.83 code and 21.88 / 24.17 prose. Ranges overlap. This item is a
+boot/maintenance confirmation, not a speed claim. End-of-run `spec_accept_length`
+1.775 after the short fast suite (not comparable to U3's 3.3 after soak).
+
+### Limits
+
+- Prefetch (U4b) and RSS trimming (U4c) still off.
+- 120-turn, GSM8K n=200, `ple_spec`, and 120k / 190k / 210k needles were not
+  re-run; U4a is a reuse-boot item.
+- Native #37068 still has no skip path of its own. `ple_reuse.py` remains a
+  recipe overlay on `copy_ple_rows_to_tp_embedding`.
 
