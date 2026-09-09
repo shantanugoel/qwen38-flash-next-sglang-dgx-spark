@@ -406,6 +406,77 @@ Repeated 40-turn runs on the pre-U6 stack landed at 48–52 tok/s decode,
 0.56–0.60 s TTFT and 97.3–97.5% cache hit, with **0 invalid tool calls** every
 time.
 
+### Upstream `sglang.benchmark.serving` — recognized datasets (2026-09-09)
+
+Third-party harness rather than `bench/`: `python -m sglang.benchmark.serving`
+inside the running container (`sglang.bench_serving` is the deprecated alias).
+Same accepted U6 default, single stream (`--max-concurrency 1`), thinking
+**off**, clock-capped GB10. One run each, no repeats.
+
+| | ShareGPT | agentic-trace (SWE-smith) | LongBench-v2 |
+| --- | ---: | ---: | ---: |
+| Backend | `sglang` | `sglang-oai-chat` | `sglang-oai-chat` |
+| Requests | 50 | 48 turns (4 convs x 12) | 10, all succeeded |
+| Duration | 497.9 s | 403.7 s | **5667.7 s (94 min)** |
+| Input tokens | 24814 | n/a (multi-turn replay) | **2484330** (~248k/req) |
+| Generated tokens | 11766 | 10560 | 100 (multiple choice) |
+| Input throughput | 49.8 tok/s | — | **438.3 tok/s** |
+| Output throughput | 23.63 tok/s | 26.16 tok/s | 0.02 tok/s (n/a) |
+| Steady decode (mean TPOT / ITL) | 31.88 ms → **31.4 tok/s** | 22.55 ms → **44.3 tok/s** | 38.75 ms → **25.8 tok/s** |
+| Accept length | 2.63 | **2.72** | 2.72 |
+| TTFT median / P99 | 1.37 s / 14.4 s | **1.29 s** / 27.6 s | **511.9 s / 1028.9 s** |
+| E2E median / P99 | 8.1 s / 28.4 s | 6.3 s / 33.4 s | 549.1 s / 1029.3 s |
+
+**Real coding-agent traffic is the fastest decode on this box — 44.3 tok/s**,
+ahead of ShareGPT chat (31.4) and of this repo's own code prompts. Agent turns
+are code and tool output, where the MTP draft lands most often (accept 2.72 vs
+2.63). This is the same asymmetry the code/prose table shows, measured on
+recorded sessions instead of hand-written prompts.
+
+**Prefill degrades non-linearly with context, and it is the whole long-context
+cost.** About 2100 tok/s at 4–5k prompt tokens, ~500 tok/s at 248k; the engine
+log shows those batches running `cuda graph: False` at 4096-token chunks,
+308–607 tok/s. At near-full context TTFT is **8.5 minutes**, worst case 17.
+Decode at that depth is unaffected (25.8 tok/s). LongBench-v2 also contains
+samples well past this context (one tokenizes to 1.12M); the 10 sampled here all
+fit and completed.
+
+**The dev-session cost is the TTFT tail, not throughput.** agentic-trace median
+TTFT is 1.29 s but P99 is 27.6 s: most turns extend the transcript and hit the
+radix cache, and the occasional prefix-missing turn re-prefills a large context.
+
+The trace is not shipped. It was built from
+[`SWE-bench/SWE-smith-trajectories`](https://huggingface.co/datasets/SWE-bench/SWE-smith-trajectories)
+(`data/ticks-00000-of-00008.parquet`), keeping `resolved=True` conversations with
+>= 6 turns and splitting each message list into the loader's turn-delta shape —
+one turn per assistant reply, assistant messages dropped so the server generates
+them. 24 conversations, 9–76 turns (median 41).
+
+```bash
+# ShareGPT (auto-downloads the dataset into the mounted HF cache)
+docker exec qwen38-flash-next python3 -m sglang.benchmark.serving \
+  --backend sglang --base-url http://127.0.0.1:30000 \
+  --model RadixArk/Qwen3.8-Flash-Next-NVFP4 \
+  --served-model-name qwen38-flash-next-nvfp4-mtp \
+  --dataset-name sharegpt --num-prompts 50 --max-concurrency 1
+
+# agentic trace (needs the converted trace JSON at --dataset-path)
+docker exec qwen38-flash-next python3 -m sglang.benchmark.serving \
+  --backend sglang-oai-chat --base-url http://127.0.0.1:30000 \
+  --model RadixArk/Qwen3.8-Flash-Next-NVFP4 \
+  --served-model-name qwen38-flash-next-nvfp4-mtp \
+  --dataset-name agentic-trace --dataset-path /tmp/swesmith_trace.json \
+  --num-prompts 4 --agentic-max-turns 12 --max-concurrency 1 \
+  --extra-request-body '{"chat_template_kwargs":{"enable_thinking":false}}'
+```
+
+**What this does not establish.** These are serving measurements. The agentic
+replay feeds the model's own replies forward but **nothing grades them** — it is
+not a coding-correctness result and does not close the Terminal-Bench gap noted
+above. ShareGPT ran on the native backend with no chat template, so its prompts
+are raw text; the other two applied the chat template with `enable_thinking`
+false. Single run each, concurrency 1 only.
+
 ### Decode (August 28 baseline recipe — superseded by the U6 table above)
 
 | | thinking off | thinking on |
