@@ -65,6 +65,21 @@ def check_prompt(body):
         raise ValueError("request exceeds U0 short-context ceiling")
 
 
+def reasoning_tokens(usage) -> int:
+    """Thinking-token count, wherever this build puts it.
+
+    SGLang `4ccff141` reports `reasoning_tokens` at the top level of `usage`;
+    the OpenAI shape nests it under `completion_tokens_details`. Reading only
+    the nested key silently returns 0 for every thinking request on this build.
+    """
+    usage = usage or {}
+    top = usage.get("reasoning_tokens")
+    if top:
+        return int(top)
+    nested = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    return int(nested or 0)
+
+
 def base() -> str:
     return os.environ.get("BASE", "http://127.0.0.1:30000").rstrip("/")
 
@@ -131,10 +146,7 @@ def chat(
         "finish": choice.get("finish_reason"),
         "prompt_tokens": usage.get("prompt_tokens") or 0,
         "completion_tokens": usage.get("completion_tokens") or 0,
-        "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get(
-            "reasoning_tokens"
-        )
-        or 0,
+        "reasoning_tokens": reasoning_tokens(usage),
         "raw": data,
     }
 
@@ -258,10 +270,7 @@ def chat_stream(
         "completion_tokens": ct,
         "cached_tokens": cached,
         "cache_hit_pct": round(100.0 * cached / pt, 2) if pt else 0.0,
-        "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get(
-            "reasoning_tokens"
-        )
-        or 0,
+        "reasoning_tokens": reasoning_tokens(usage),
         "prefill_tps": round(pt / ttft, 1) if ttft else 0.0,
         "decode_tps": round((ct - 1) / dec_window, 2) if ct > 1 else 0.0,
         "chunks": chunks,
