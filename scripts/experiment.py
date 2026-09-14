@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -67,6 +68,10 @@ def validate(name, report):
         s = report['summary']
         return (s.get('n', 0) > 0 and s.get('prompts', 0) > 0
                 and len(report.get('results') or []) == s['n'])
+    if name == 'chunk_tail':
+        s = report['summary']
+        return (report['failed'] == 0 and s['run'] == s['cases'] and s['after_chat_ok'] is True
+                and s['resend_short_extend'] == s['resend_ok'] > 0)
     if name == 'ple_spec':
         rows = report['results']
         return bool(rows) and report['failed'] == 0 and all(r['pass'] is True for r in rows)
@@ -111,6 +116,10 @@ def suites(out, env, guard=None):
         tasks += [('prefill', [sys.executable, str(ROOT / 'bench/prefill.py')],
                    {'SIZES': env.get('SIZES', '8k,32k'),
                     'N': env.get('PREFILL_N', env.get('N', '3'))})]
+    if env.get('CHUNK_TAIL') == '1':
+        # A1: forwards with 1..3 token rows (chunk tails, page-aligned radix
+        # resends, tiny prompts) must complete and leave the server healthy.
+        tasks += [('chunk_tail', [sys.executable, str(ROOT / 'bench/chunk_tail.py')], {})]
     tasks += [('quality', [sys.executable, str(ROOT / 'bench/quality.py')], {'EFFORT': '1'}),
               ('decode', [sys.executable, str(ROOT / 'bench/decode.py')], {'THINKING': 'both', 'N': env.get('N', '3')})]
     if env.get('EFFORT_PROBE') == '1':
@@ -305,8 +314,14 @@ def run(out, env):
     env['EXPERIMENT_PLE_DIR'] = env['PLE_DIR']
     # POST before occupying the GPU; do not start alongside any remaining occupant.
     request = urllib.request.Request(env.get('UNLOAD_URL', 'http://127.0.0.1:8080/api/models/unload'), method='POST')
-    with urllib.request.urlopen(request, timeout=10) as response:
-        response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response.read()
+    except urllib.error.URLError as exc:
+        # llama-swap not running holds nothing; the occupant check below still gates.
+        if not isinstance(exc.reason, ConnectionRefusedError):
+            raise
+        print('llama-swap unload endpoint refused the connection; not running', flush=True)
     # Stop only our prior recipe instance, before verifying that the GPU is idle.
     names = command(['docker', 'ps', '-a', '--format', '{{.Names}}']).splitlines()
     if container in names:

@@ -129,15 +129,17 @@ if [[ -n "${TOKEN_MAP_HOST}" ]]; then
     SPEC_ARGS+=(--speculative-token-map /speculative-token-map.pt)
   fi
 fi
-# U8a overlay (sglang#38209): mount the patched QSA selection sources only when
-# prepare.sh applied it. The accepted baseline mounts nothing extra here.
+# A1 (sglang#38346): the QSA indexer always carries the extend compress clamp.
+[[ -f "${BUILD}/path_qsa_dir.txt" && -f "${BUILD}/qsa/qsa_indexer.py" ]] || {
+  echo "QSA indexer overlay missing. rerun prepare.sh" >&2
+  exit 1
+}
+QSA_DIR_IN_IMAGE="$(cat "${BUILD}/path_qsa_dir.txt")"
+MOUNTS+=(-v "${BUILD}/qsa/qsa_indexer.py:${QSA_DIR_IN_IMAGE}/qsa_indexer.py:ro")
+# U8a overlay (sglang#38209): mount the other patched QSA selection sources only
+# when prepare.sh applied it.
 if [[ -f "${BUILD}/qsa_prefill_selection.on" ]]; then
-  [[ -f "${BUILD}/path_qsa_dir.txt" ]] || {
-    echo "U8a overlay is on but path_qsa_dir.txt is missing. rerun prepare.sh" >&2
-    exit 1
-  }
-  QSA_DIR_IN_IMAGE="$(cat "${BUILD}/path_qsa_dir.txt")"
-  for qsa_file in kernel.py metadata.py qsa_indexer.py; do
+  for qsa_file in kernel.py metadata.py; do
     [[ -f "${BUILD}/qsa/${qsa_file}" ]] || {
       echo "U8a overlay is on but ${BUILD}/qsa/${qsa_file} is missing" >&2
       exit 1

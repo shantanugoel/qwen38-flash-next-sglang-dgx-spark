@@ -85,6 +85,10 @@ if [[ "${QSA_PREFILL_SELECTION:-0}" == "1" ]]; then
   echo "U8a overlay applied: sglang#38209 QSA prefill selection"
 fi
 
+# A1 (sglang#38346): clamp the extend compress gather so a 1..3 token chunk
+# cannot read past token_k. After U8a so it patches whichever indexer is live.
+python3 "${ROOT}/patches/qsa_chunk_tail_clamp.py" "${BUILD}/qsa/qsa_indexer.py"
+
 cp "${ROOT}/patches/qsa_sm121_varlen.py" "${BUILD}/sm121_varlen.py"
 rm -rf "${BUILD}/kda_kernels"
 cp -R "${ROOT}/patches/kda_kernels" "${BUILD}/kda_kernels"
@@ -129,6 +133,9 @@ assert overlay_on == ("QSA_PREFILL_ALL_VISIBLE_MAX_BATCH" in kernel), (
     "U8a overlay marker and qsa/kernel.py disagree")
 assert overlay_on == ("prefill_all_visible" in qsa), (
     "U8a overlay marker and the QSA backend disagree")
+indexer = Path("${BUILD}/qsa/qsa_indexer.py").read_text()
+assert "group_locs = group_locs.clamp_max(source_keys.shape[0] - 1)" in indexer, (
+    "A1 #38346 extend compress clamp missing")
 assert Path("${BUILD}/kda_kernels/qwen38_qsa_sm121/kernel.py").is_file()
 if native.is_file():
     table = native.read_text()

@@ -2585,3 +2585,86 @@ native file-backed PLE reuse, SM121 Triton QSA, ReplaySSM PLE-state commit,
 `MAX_TOTAL=524288`, `MAX_RUNNING=4`, `PREFILL=4096`, vision enabled and
 thinking enabled by default. U11 remains deferred; no server state changed and
 no rollback was needed.
+
+
+## Sep 14 plan — A1: QSA extend compress-gather clamp (sglang#38346) (2026-09-14)
+
+**Decision: accepted. `prepare.sh` now always applies the one-line clamp to
+`qsa/qsa_indexer.py`, and `serve.sh` always mounts that file.** This fixes an
+out-of-bounds read that our pin demonstrably performs, with no measured cost.
+
+The bug, confirmed against the pinned image rather than only the PR text:
+`_qsa_write_plan` pads its fixed-capacity write plan with row 0 / block 0
+entries, and the extend path gathers each entry's members as
+`member_rows[:, None] + arange(4)`. A forward with fewer than 4 token rows reads
+rows 1..3 past `token_k`. The fused Triton compress kernel never bounds-checks,
+so on GPU the read is silently absorbed unless it crosses an unmapped page.
+There are three ways to produce such a forward, and all of them are reachable here:
+a final chunked-prefill piece of 1..3 tokens (`k*4096 + 1..3`); a **radix-cache
+resend whose length is `64*m + 1..3`**, where the page-aligned hit leaves a 1..3
+token extend (about 3 in 64 of all cache-hit resends); and a 1..3 token prompt.
+
+Evidence the fix is right (`scripts/test_qsa_chunk_tail.sh`, CPU-only, the
+image's real `_qsa_write_plan` and the real stock vs patched
+`update_key_state_and_compress`; on CPU the same gather raises):
+
+| Case | Stock | Clamped |
+| --- | --- | --- |
+| prefix 0/4096/8192, extend 1/2/3 (9 cases) | `IndexError` every time | completes, writes only reserved slot 0 |
+| full groups: extend 4, 4096, 4099, 2047@64, 5@8192, 4096@4096 | — | written slots and values **bit-identical** to stock |
+
+New `bench/chunk_tail.py` (suite `CHUNK_TAIL=1`) sends all three shapes through
+`/generate` with exact, salted token ids and checks the resend really extended
+1..3 tokens (`prompt_tokens - cached_tokens`). The stock server (the idle :5802
+instance, before any boot) completed all 30 requests without a crash, matching
+upstream's "usually silent". So the value of this item is removing a
+demonstrated OOB read, not a crash we could reproduce on demand.
+
+Matched A/B/A, one variable (the clamp), same image digest, revision, PLE
+identity, flags, prompts and suite set:
+
+    TAG=a1-baseline-20260914 (stock indexer staged into build/qsa), then
+    TAG=a1-qsa-clamp-20260914 and TAG=a1-qsa-clamp-confirm-20260914
+    PROFILE=u3 PREFILL=4096 CHUNK_TAIL=1 TURNS=120 N=3 SIZES=8k,32k,128k \
+      PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap \
+      ONLY=smoke,chunk_tail,quality,decode,longctx,agentic_off,agentic_on
+
+| Metric | stock | clamp | clamp confirm |
+| --- | ---: | ---: | ---: |
+| chunk_tail (24 short forwards, server healthy after) | 24/24 | 24/24 | 24/24 |
+| Quality | 11/12 | 11/12 | 12/12 |
+| Decode off code samples tok/s | 47.2 / 46.6 / 48.5 | 44.8 / 45.6 / 48.4 | 45.9 / 46.1 / 51.2 |
+| Decode off prose / on code / on prose median | 20.71 / 36.97 / 26.88 | 20.06 / 35.00 / 27.26 | 20.84 / 38.30 / 26.67 |
+| Cold TTFT 8k / 32k / 128k s | 3.37 / 10.36 / 38.32 | 3.17 / 10.34 / 38.58 | 3.24 / 10.33 / 38.93 |
+| Needles 8k/32k/128k | pass | pass | pass |
+| 120-turn off: invalid / recall / completion tok / decode bands | 0 / pass / 28.5 / 67.9–69.0 | 0 / pass / **42** / 58.5–58.9 | 0 / pass / 29 / 69.5–71.0 |
+| 120-turn on: invalid / recall / decode bands | 0 / pass / 29.9–33.0 | 1 / pass / 30.5–39.2 | 0 / pass / 34.3–40.0 |
+| Boot s / min MemAvailable GiB | 577 / 10.26 | 581 / 10.10 | 601 / 10.21 |
+
+Reading it. Decode sample ranges overlap in every cell and TTFT is flat. The
+first clamp run looked worse on agentic thinking-off (58.7 vs 68.9 tok/s), but
+its completions were 42 tokens per turn against 28.5 — a different greedy
+output mode, not a slower server. The same 42-vs-29 split appears across
+earlier boots of identical configurations (U1/U3 at 42, U2/U5a/U6/U10 at
+29–30), and agentic traffic never produces a 1..3 token extend, so the clamp
+does not even execute there. The confirm boot landed back in the 29-token mode
+at 69.5–71.0 tok/s and passed every suite. The one invalid tool call in the
+first run is turn 52 hitting `max_tokens=512` with thinking on in the middle of
+a `search_docs` call (truncated JSON), a harness budget artifact.
+
+A side observation for C4: the chunk_tail resend of an identical random-token
+prompt, greedy, reproduced its first-send output 6/6, 4/6 and 2/6 times across
+the three boots (and 1/6 on the stock :5802 server), independent of the clamp.
+Cache-hit vs cache-miss greedy divergence is real here on low-confidence
+prompts.
+
+Harness: `experiment.py` now treats a refused llama-swap unload connection
+(llama-swap not running) as nothing to unload; the `nvidia-smi` occupant check
+still gates the launch.
+
+Limits: three boots, three decode repeats; no GSM8K or BFCL rerun (the change
+provably leaves real groups bit-identical). #37786, upstream's fuller follow-up,
+is still open and not ported.
+
+Rollback: remove the `qsa_chunk_tail_clamp.py` line from `prepare.sh` and rerun
+it; `serve.sh` then mounts a stock indexer. Next item: B1.
