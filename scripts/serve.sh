@@ -97,7 +97,13 @@ UIDGID="$(docker_user)"
 extra_gpu_groups
 mkdir -p "${PLE_DIR}" "${SGLANG_CACHE}"
 
+[[ -f "${LOADER_BACKEND}" && -f "${MTP_BACKEND}" && -f "${BUILD}/path_loader.txt" && -f "${BUILD}/path_qwen4_exp_mtp.txt" ]] || {
+  echo "B1 loader/MTP overlays missing. run ${SCRIPT_DIR}/prepare.sh first." >&2
+  exit 1
+}
 MOUNTS=(
+  -v "${LOADER_BACKEND}:$(cat "${BUILD}/path_loader.txt"):ro"
+  -v "${MTP_BACKEND}:$(cat "${BUILD}/path_qwen4_exp_mtp.txt"):ro"
   -v "${QWEN4_BACKEND}:${QWEN4_IN_IMAGE}:ro"
   -v "${QSA_BACKEND}:${QSA_IN_IMAGE}:ro"
   -v "${SPEC_UTILS_BACKEND}:${SPEC_UTILS_IN_IMAGE}:ro"
@@ -185,6 +191,7 @@ docker run -d --name "${CONTAINER}" --init \
   -e SGLANG_QWEN4_PLE_FILE_DIR=/ple \
   -e SGLANG_QWEN4_PLE_FILE_PREFETCH="${SGLANG_QWEN4_PLE_FILE_PREFETCH:-0}" \
   -e SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB="${SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB:-0}" \
+  -e SGLANG_CHECKPOINT_KEY_FILTER="${SGLANG_CHECKPOINT_KEY_FILTER:-1}" \
   -e SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN \
   -v "${HF_CACHE}:/huggingface" \
   -v "${SGLANG_CACHE}:/tmp/.cache/sglang" \

@@ -134,6 +134,12 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### B1. Draft pass reads only the MTP files — ~80 s, low risk
 
+- **Status: DONE 2026-09-14, accepted.** `patches/draft_mtp_files.py` (loader
+  `key_filter` + `Qwen4ExpForCausalLMMTP.checkpoint_key_filter`); the filter keeps
+  `00010..00012` (13.72 GiB, all 31 `mtp` keys). Draft load 81–90 s → 31–33 s;
+  boot 562–575 s → 525 s on the clean repeat (main load varies ±50 s between
+  boots). KV, acceptance, decode and quality unchanged. Rollback:
+  `SGLANG_CHECKPOINT_KEY_FILTER=0`. See RESEARCH_LOG "Sep 14 plan — B1".
 - **Change:** when loading the NEXTN draft, restrict the file list to files that
   the index maps `mtp.*` keys to, plus the files holding any non-MTP tensor the
   draft `load_weights` consumes. Today that is `00010..00012`, which already

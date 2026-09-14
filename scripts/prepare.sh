@@ -37,6 +37,19 @@ printf '%s\n' "${qsa_path}" > "${BUILD}/path_qsa.txt"
 printf '%s\n' "${spec_utils_path}" > "${BUILD}/path_spec_utils.txt"
 printf '%s\n' "$(dirname "${qsa_path}")/qsa/sm121_varlen.py" > "${BUILD}/path_sm121_varlen.txt"
 printf '%s\n' "${kernels_dir}/kda_kernels" > "${BUILD}/path_kda_kernels.txt"
+# B1: the weight loader and the MTP draft model, for the draft file filter.
+loader_paths="$(docker run --rm --entrypoint python3 "${IMAGE}" -c \
+  'import sglang.srt.model_loader.loader as l, sglang.srt.models.qwen4_exp_mtp as m; print(l.__file__); print(m.__file__)' | tail -2)"
+loader_path="$(sed -n 1p <<< "${loader_paths}")"
+mtp_path="$(sed -n 2p <<< "${loader_paths}")"
+[[ "${loader_path}" == */model_loader/loader.py && "${mtp_path}" == */models/qwen4_exp_mtp.py ]] || {
+  echo "could not resolve loader.py / qwen4_exp_mtp.py in the image" >&2
+  exit 1
+}
+printf '%s\n' "${loader_path}" > "${BUILD}/path_loader.txt"
+printf '%s\n' "${mtp_path}" > "${BUILD}/path_qwen4_exp_mtp.txt"
+extract "${loader_path}" "${LOADER_BACKEND}"
+extract "${mtp_path}" "${MTP_BACKEND}"
 extract "${qwen4_path}" "${QWEN4_BACKEND}"
 extract "${qsa_path}" "${QSA_BACKEND}"
 extract "${spec_utils_path}" "${SPEC_UTILS_BACKEND}"
@@ -66,6 +79,7 @@ python3 "${ROOT}/patches/ple_reuse.py" "${QWEN4_BACKEND}"
 python3 "${ROOT}/patches/qsa_drop_sm121_sdpa.py" "${QSA_BACKEND}"
 python3 "${ROOT}/patches/qsa_sm121_triton.py" "${QSA_BACKEND}"
 python3 "${ROOT}/patches/replayssm_ple_commit.py" "${SPEC_UTILS_BACKEND}"
+python3 "${ROOT}/patches/draft_mtp_files.py" "${LOADER_BACKEND}" "${MTP_BACKEND}"
 
 # U8a opt-in: sglang#38209 QSA prefill selection, applied over the U1 Triton
 # backend. QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh
@@ -95,6 +109,7 @@ cp -R "${ROOT}/patches/kda_kernels" "${BUILD}/kda_kernels"
 
 python3 -m py_compile "${BUILD}"/qsa/*.py
 python3 -m py_compile "${QWEN4_BACKEND}" "${QSA_BACKEND}" "${SPEC_UTILS_BACKEND}" \
+  "${LOADER_BACKEND}" "${MTP_BACKEND}" \
   "${BUILD}/sm121_varlen.py" \
   "${BUILD}/kda_kernels/__init__.py" \
   "${BUILD}/kda_kernels/qwen38_qsa_sm121/__init__.py" \
@@ -133,6 +148,11 @@ assert overlay_on == ("QSA_PREFILL_ALL_VISIBLE_MAX_BATCH" in kernel), (
     "U8a overlay marker and qsa/kernel.py disagree")
 assert overlay_on == ("prefill_all_visible" in qsa), (
     "U8a overlay marker and the QSA backend disagree")
+loader = Path("${LOADER_BACKEND}").read_text()
+mtp = Path("${MTP_BACKEND}").read_text()
+assert "def _files_with_matching_keys" in loader and "key_filter=getattr(model" in loader, (
+    "B1 loader key filter missing")
+assert "def checkpoint_key_filter" in mtp, "B1 MTP checkpoint_key_filter missing"
 indexer = Path("${BUILD}/qsa/qsa_indexer.py").read_text()
 assert "group_locs = group_locs.clamp_max(source_keys.shape[0] - 1)" in indexer, (
     "A1 #38346 extend compress clamp missing")

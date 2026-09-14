@@ -389,7 +389,8 @@ def run(out, env):
                 'Triton SM121 QSA', 'committing PLE n-gram',
                 'file-backed mmap', 'reusing recipe backing file',
                 'WILLNEED prefetch', 'RSS trimmer', 'resident set capped',
-                'trimmed resident', 'speculative-token-map')))
+                'trimmed resident', 'speculative-token-map',
+                'Checkpoint key filter', 'skipped checkpoint files')))
         (out / 'boot-facts.txt').write_text(facts)
         token_map = env.get('SPECULATIVE_TOKEN_MAP', '').strip()
         if token_map:
@@ -453,6 +454,12 @@ def run(out, env):
             (out / 'rss-trim.log').write_text('\n'.join(
                 line for line in served.splitlines()
                 if 'resident set' in line or 'trimmed resident' in line))
+            # Draft acceptance over the whole run, from the decode batch lines.
+            accepts = [float(x) for x in re.findall(r'accept len: ([0-9.]+)', served)]
+            if accepts:
+                result['accept_len'] = {'lines': len(accepts),
+                                        'mean': round(sum(accepts) / len(accepts), 3),
+                                        'median': sorted(accepts)[len(accepts) // 2]}
             # U0 experiments own their server lifecycle; never leave an unguarded
             # or known-old server serving unattended after the benchmark ends.
             stopped = subprocess.run(['docker', 'stop', '-t', '30', container],

@@ -2668,3 +2668,69 @@ is still open and not ported.
 
 Rollback: remove the `qsa_chunk_tail_clamp.py` line from `prepare.sh` and rerun
 it; `serve.sh` then mounts a stock indexer. Next item: B1.
+
+
+## Sep 14 plan — B1: NEXTN draft pass reads only the MTP files (2026-09-14)
+
+**Decision: accepted, on by default.** The draft load goes from 81–90 s to
+31–33 s, and boot from 562–575 s to 525 s on a clean repeat.
+
+The waste, confirmed in the pinned image: the draft (`Qwen4ExpForCausalLMMTP`)
+loads through `ModelOptModelLoader` → `DefaultModelLoader`, which resolves all
+206 `*.safetensors` files (125.9 GiB) and materialises every tensor, only for
+the inherited `Qwen3_5ForCausalLMMTP.load_weights` to drop every name without
+`"mtp"` as the first check in its loop. `embed_tokens`/`lm_head` come from the
+target via `set_embed_and_head`, not from the draft's own read.
+
+Change (`patches/draft_mtp_files.py`, two new overlays mounted by `serve.sh`):
+`loader.py`'s `Source` takes an optional `key_filter` from the model's
+`checkpoint_key_filter`, and `_get_weights_iterator` keeps only files the
+safetensors index maps a passing key to, plus any file the index does not
+list. Without an index, or with no passing key, the list is unchanged.
+`qwen4_exp_mtp.py` defines the filter as `"mtp" in name`, mirroring the guard.
+The file set is derived from the index at runtime.
+`SGLANG_CHECKPOINT_KEY_FILTER=0` restores stock resolution.
+
+Check first (in the image, `results/b1-unit/check.log`): the MTP class does not
+override `load_weights` and inherits Qwen3.5's; the `"mtp"` guard precedes any
+parameter use, so consumed keys ⊆ keys containing `mtp`. On the real index the
+filter keeps `model-bf16-00010..00012` (13.72 GiB), which hold all 31 `mtp`
+keys; the no-index and no-match fallbacks return the list unchanged, and a
+model without the attribute gets `key_filter=None`.
+
+Matched boots, one variable (`SGLANG_CHECKPOINT_KEY_FILTER`), same build,
+`PROFILE=u3 PREFILL=4096 N=3 SIZES=8k,32k ONLY=smoke,quality,decode,longctx`,
+order off → on → off → on:
+
+| Metric | off | on | off2 | on2 |
+| --- | ---: | ---: | ---: | ---: |
+| Draft load s | 90.32 | **31.46** | 81.16 | **32.64** |
+| Main load s | 402.71 | 449.29 | 395.89 | 410.06 |
+| Boot s | 574.65 | 561.29 | 561.55 | **525.28** |
+| Draft "mem usage" GB (loader log) | 0.94 | 3.23 | 0.59 | 3.31 |
+| available_gpu_mem after graphs GB | 12.10 | 12.06 | 11.95 | 12.94 |
+| KV tokens | 524288 | 524288 | 524288 | 524288 |
+| accept len mean (run log) | 2.727 | 2.678 | 2.615 | 2.691 |
+| Decode off code / prose tok/s | 49.47 / 21.18 | 48.92 / 21.11 | 48.59 / 22.37 | 47.12 / 21.91 |
+| Quality / needles 8k,32k | 11/12 / pass | 11/12 / pass | 11/12 / pass | 11/12 / pass |
+| Min MemAvailable GiB | 10.37 | 10.19 | 10.42 | 10.34 |
+
+Reading it. The draft phase saving is large and repeatable (−50 to −59 s). The
+first "on" boot did not show it end to end because its *main* load, which B1
+does not touch, ran 47 s slow; the repeat's main load was normal and the boot
+came in at 525 s. Main-load variance of ±50 s is therefore the noise floor for
+boot comparisons on this box, which B2 has to beat as well. The loader's draft
+"mem usage" rises because it is measured as a drop in unified-memory
+availability and now includes the page cache of the 13.7 GiB it just read; KV
+capacity and memory after graph capture are unchanged, so it is not a real
+allocation. Acceptance, decode, quality (the same unstable
+`effort_thinking_off` case in all four) and needles are unchanged. The 64k
+token map still applies (launch flag present, checked by the harness).
+
+Harness: `experiment.py` records the filter line in `boot-facts.txt` and a
+run-wide `accept_len` summary in `experiment_status.json`.
+
+Limits: two boots per arm; boot phases read from the loader's own timers.
+
+Rollback: `SGLANG_CHECKPOINT_KEY_FILTER=0`, or drop the `draft_mtp_files.py`
+line from `prepare.sh` and the two mounts from `serve.sh`. Next item: B2.
