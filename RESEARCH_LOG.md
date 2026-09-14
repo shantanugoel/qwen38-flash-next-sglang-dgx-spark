@@ -2734,3 +2734,62 @@ Limits: two boots per arm; boot phases read from the loader's own timers.
 
 Rollback: `SGLANG_CHECKPOINT_KEY_FILTER=0`, or drop the `draft_mtp_files.py`
 line from `prepare.sh` and the two mounts from `serve.sh`. Next item: B2.
+
+
+## Sep 14 plan — B2: skip reading the PLE files on a reused table (2026-09-14)
+
+**Decision: rejected. Nothing is applied by default; `patches/ple_slice_reuse.py`
+and `scripts/test_ple_slice_reuse.*` stay in the repo as the record.** The
+premise did not hold on this image: the PLE files were never the slow tail of
+the load.
+
+What was built. The plan's cheaper variant, chosen because it keeps today's
+byte-level verification instead of trusting a sidecar: the target model's
+`checkpoint_key_filter` (the B1 hook) rejects `.ple_embedding.ngram_embedding.`
+keys, so the loader skips the ten `model-plefp8-*` files and tells the model
+which files it skipped. After the weight loop, each shard is verified by
+reading, through `safe_open(...).get_slice`, only the rows that cover the same
+34 sampled 4 KiB windows `_ple_shard_matches` compares. The scale buffer is
+loaded with `get_tensor`, and any mismatch falls back to the whole-shard copy
+path. The CPU test on the real table and checkpoint (shards 0/63/127) agreed
+with the whole-tensor verifier, caught first- and last-byte corruption, rejected
+a shape mismatch, and honoured `SGLANG_QWEN4_PLE_REUSE=0`.
+
+The finding that decides it. In that same test, `get_tensor` on a 381 MiB PLE
+shard took **0.2–0.6 ms**: safetensors 0.8.0 returns a lazily mmap-backed
+tensor, so the stock path only faults in the sampled windows. The shard
+progress bar of the plan's own reference boot, re-read with file positions,
+shows where the "last 17 shards, 83 s" went:
+
+| Main-pass bar (sorted files) | Files | Elapsed |
+| --- | --- | ---: |
+| 190 → 196 | expert shards, then `model-bf16-00001/00010/00011/00012` | 319 → 396 s (**~77 s**) |
+| 196 → 206 | the ten `model-plefp8-*` files | 396 → 400 s (**~4 s**) |
+
+So the tail cost is the dense BF16 files (B3 territory), not the PLE table.
+
+Measured anyway, one variable (`SGLANG_QWEN4_PLE_SLICE_REUSE`), same A1+B1
+build, `PROFILE=u3 PREFILL=4096 N=3 SIZES=8k,32k ONLY=smoke,quality,decode,longctx`.
+The harness now saves the shard progress bars as `load-progress.txt`.
+
+| Metric | off | on |
+| --- | ---: | ---: |
+| Main load s | 395.79 | 402.22 |
+| Boot s | 504.14 | 515.25 |
+| Progress bar: PLE files | 376 → 382 s (6 s) | skipped; bar ends at 196 files, 384 s |
+| Boot log | `128/128 shards already on disk` | same, plus `read 10 skipped checkpoint files by slice (128 shards verified)` |
+| Min MemAvailable GiB | 10.26 | 10.81 |
+| accept len mean | 2.608 | 2.693 |
+| Quality / needles | 11/12 / pass | 12/12 / pass |
+
+The 6 s of iterator time saved is spent again on slice verification, and both
+differences sit inside the ±50 s main-load noise seen in B1. A planned second
+off/on pair and a forced-fallback boot were stopped early (the off2 run
+was terminated during boot, `results/b2-slice-off2-20260914-aborted-early`)
+because a phase-level measurement of 6 s cannot become a meaningful boot
+saving with more repeats. The transient-RAM benefit the plan expected does not
+exist either, because nothing was being materialised.
+
+Rollback: nothing to roll back; `prepare.sh`/`serve.sh` are back to the B1
+state and `build/` was verified identical to the pre-B2 build. Next item: the
+A2/A3/A4 long soak.

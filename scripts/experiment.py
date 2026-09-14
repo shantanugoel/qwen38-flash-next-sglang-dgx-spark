@@ -392,6 +392,10 @@ def run(out, env):
                 'trimmed resident', 'speculative-token-map',
                 'Checkpoint key filter', 'skipped checkpoint files')))
         (out / 'boot-facts.txt').write_text(facts)
+        # Shard progress bars (tqdm redraws with \r) timestamp the load phases.
+        progress = [part.strip() for line in boot_log.splitlines()
+                    for part in line.split('\r') if 'loading shards' in part]
+        (out / 'load-progress.txt').write_text('\n'.join(progress))
         token_map = env.get('SPECULATIVE_TOKEN_MAP', '').strip()
         if token_map:
             flags = json.loads((out / 'effective.json').read_text()).get('launch_flags', {})

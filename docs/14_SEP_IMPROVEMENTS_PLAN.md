@@ -153,6 +153,11 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### B2. Skip reading the PLE files when the on-disk table is valid — ~80–100 s, low risk
 
+- **Status: DONE 2026-09-14, rejected.** Built the `get_slice` variant
+  (`patches/ple_slice_reuse.py`, not applied). safetensors 0.8.0 `get_tensor` is
+  lazy over mmap, so the PLE files already cost only ~4–6 s; the 83 s tail is the
+  four `model-bf16` files. Measured main load 396 s off vs 402 s on, boot 504 vs
+  515 s. See RESEARCH_LOG "Sep 14 plan — B2".
 - **Change:** record the HF blob names (sha256 content addresses) of the 10
   `model-plefp8-*` files next to the table file. At boot, if they match and all
   128 shards were previously completed, drop those files from the weight
@@ -334,7 +339,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | # | Item | Cost | Expected payoff |
 | --- | --- | --- | --- |
 | 1 | A1 overlay (#38346) — **done** | 1 boot | removes a latent crash |
-| 2 | B1 + B2 boot fixes | 2–3 boots | boot ~9.5 → ~6.5 min |
+| 2 | B1 + B2 boot fixes — **B1 done (accepted), B2 done (rejected)** | 2–3 boots | boot ~9.5 → ~6.5 min |
 | 3 | A2/A3/A4 24 h soak with detectors | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
 | 4 | C1 real-text prefill + prefetch A/B | 2 boots | possibly 3–4x prefill at 128k+ |
 | 5 | C2 track interval 256 | 2 boots | possible agentic decode gain |
