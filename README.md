@@ -74,6 +74,10 @@ Things worth knowing:
   counted as regular completion tokens.
 - Tool calls come back as standard OpenAI `tool_calls`.
 - Vision is enabled.
+- **Set a sane `max_tokens` in agent clients.** A request whose client disconnects keeps
+  decoding for a while before the server reaps it (up to ~100 output steps in a 24 h
+  soak, sglang#36876). It always cleared, but a bounded `max_tokens` (e.g. 2–4k) caps
+  how long an abandoned request can hold one of the 4 slots.
 
 ## Configuration
 

@@ -2793,3 +2793,101 @@ exist either, because nothing was being materialised.
 Rollback: nothing to roll back; `prepare.sh`/`serve.sh` are back to the B1
 state and `build/` was verified identical to the pre-B2 build. Next item: the
 A2/A3/A4 long soak.
+
+
+## Sep 14 plan — A2/A3/A4: 24 h soak with decay, KV-corruption and zombie detectors (2026-09-14/15)
+
+**Decision: none of the three reproduced as a serving fault on the A1+B1
+default, so no overlay, watchdog or restart cadence is added.** A4's partial
+symptom is documented as client guidance in the README (`max_tokens`).
+
+New `bench/longsoak.py` (suite `LONGSOAK=1`). Three client threads leave one of
+the four slots free:
+
+- **Agentic:** growing tool-calling sessions, alternating thinking, rotated at
+  ~24k tokens.
+- **Mix:** EN/ES prose and code, thinking on/off; 30% of requests disconnect
+  mid-stream.
+- **Prefix (the A3 reproducer):** a fixed ~6k-token LongBench-v2 document
+  prefix plus a fresh 8–16k-token suffix, aborted 0.5–4 s in (mid chunked
+  prefill) by closing the socket, then the prefix resent with a question.
+
+Every 10 minutes traffic drains, then the sample records:
+
+- **A2:** idle `/metrics`; a fixed greedy decode probe (tok/s plus the server's
+  `accept len` for the probe window); traffic accept lengths from the log.
+- **A3:** a cache-hit vs post-`flush_cache` answer to the prefix question.
+- **A4:** per-rid `state was deleted in TokenizerManager` lines, and requests
+  still running while the client is idle.
+
+A 20-minute shakedown replaced a random-token probe that was too low-confidence
+to judge (`results/a2-longsoak-shakedown-20260914`).
+
+    TAG=a2-longsoak-24h-20260914 PROFILE=u3 PREFILL=4096 LONGSOAK=1 \
+      LONGSOAK_SECONDS=86400 SAMPLE_SECONDS=600 ONLY=smoke,longsoak \
+      PLE_DIR=/home/shantanu/ai/cache/sglang/flash-next-ple-mmap
+
+Ran 86761 s, 128 samples. Totals: 8879 requests, 7385 completed, 1494
+deliberate client aborts, **0 errors**, 0 invalid tool calls, 0 server
+tracebacks or CUDA errors, watchdog quiet, min MemAvailable 9.4 GiB,
+`stop_exit_code` 0.
+
+| Uptime band | Probe decode median tok/s | Probe accept len | Traffic accept len | Zombie rids | Max outputs after disconnect |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0–4 h | 47.7 | 3.73 | 2.64 | 304 | 75 |
+| 4–8 h | 50.3 | 3.80 | 2.60 | 277 | 105 |
+| 8–12 h | 47.8 | 3.77 | 2.59 | 242 | 97 |
+| 12–16 h | 47.9 | 3.75 | 2.64 | 232 | 99 |
+| 16–20 h | 48.8 | 3.77 | 2.67 | 297 | 98 |
+| 20–24 h | 46.9 | 3.77 | 2.61 | 224 | 66 |
+
+**A2 (sglang#37326, NEXTN acceptance decay to ~0 over 16–24 h): not
+reproduced.** Acceptance on the fixed probe is flat at 3.73–3.80 across the
+whole day, and so is traffic acceptance. Probe throughput is flat within
+single-sample noise (38–54 tok/s; an early 38.5 dip recovered on the next
+sample), and no decay onset (<1.5 accept or <60% of the first hour) was flagged.
+The reported reproduction differs from this recipe in ways that plausibly
+matter (64k draft token map, ReplaySSM PLE commit, FP32 state, `extra_buffer`),
+but which one protects us was not isolated. No watchdog or restart cadence is
+needed; #38191 was not tried.
+
+**A3 (sglang#38319 / #38355, abort during chunked-prefill insert leaves corrupted
+QSA KV): not reproduced.**
+
+- The first-token detector (id ≥ 248077; the tokenizer's added tokens end at
+  248076, and the bug emits 248319) never fired across 374 prefix probes, all
+  mix/agentic traffic, and roughly 370 mid-prefill aborts on a shared prefix.
+- The hit-vs-flush comparison disagreed in 2 of 128 samples, **in opposite
+  directions**. At 7.3 h the cache-hit answer differed from the empty-cache
+  reference and a flush restored it. At 11.0 h the cache-hit answer matched the
+  reference and the post-flush answer was the one that differed.
+- The disagreeing prompt is a knife-edge one: raw `/generate` with no chat
+  template, where the reference is the end token 248046 and the alternative is a
+  plausible text answer. So these are hit/miss and miss/miss greedy flips of
+  valid tokens, not corruption, consistent with A1's resend observation (C4
+  follows up). That one event makes the harness mark the suite `fail`
+  (`a3_fixed_by_flush` counts as a failure by design); it is classified here,
+  not ignored.
+- #38355 is not overlaid.
+
+**A4 (sglang#36333 / #36876, aborts lost in the batch-transition window):
+partial.** 1494 client aborts yielded 1581 request ids that kept emitting
+outputs after their client was gone, up to 105 output steps (at ~2.6 tokens
+per step, well short of the 600-token `max_tokens`, so they were eventually
+aborted rather than run out). A slot was never held: at all 128 samples the
+server reported **0 running and 0 queued requests** once the client drained,
+so `zombie_clear_s` never had to wait. The short-term mitigation from the plan
+(documented `max_tokens`) is now in the README; pick up the upstream fix when
+it merges.
+
+Side observation: scheduler `RssFile` (mostly the PLE table mapping) rose
+from 6.5 GiB at 3 h to 8–9.4 GiB after 13 h and then held, while host
+MemAvailable stayed ~10 GiB. This is the creep U4c's trimmer targets. It did not
+affect throughput or memory headroom within 24 h.
+
+Limits: one boot and one traffic mix; the probe measures one prompt; prefix
+aborts all use one document prefix; zombie accounting reads server log lines,
+so a request lost entirely before logging would only show as a held slot
+(never observed).
+
+Rollback: nothing changed in serving. Next item: C1.

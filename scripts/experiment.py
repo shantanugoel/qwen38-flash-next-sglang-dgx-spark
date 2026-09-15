@@ -98,6 +98,10 @@ def validate(name, report):
                         and r.get('prefill_prompt_tokens', 0) > 0
                         and r.get('prefill_needle_pass') is True
                         and r.get('decode_streams', 0) >= 2 for r in rows))
+    if name == 'longsoak':
+        s = report['summary']
+        return (s.get('final') is True and report['failed'] == 0 and s.get('samples', 0) > 0
+                and float(s.get('seconds') or 0) >= 0.9 * float(s.get('target_seconds') or 0))
     if name in ('soak', 'growsoak'):
         s = report['summary']
         target = float(s.get('target_seconds') or 0)
@@ -158,6 +162,12 @@ def suites(out, env, guard=None):
     if env.get('SOAK_SECONDS'):
         tasks += [('soak', [sys.executable, str(ROOT / 'bench/soak.py')],
                    {'SOAK_SECONDS': env['SOAK_SECONDS']})]
+    if env.get('LONGSOAK') == '1':
+        # A2/A3/A4: mixed agentic/abort/prose traffic with decay, KV-corruption
+        # and zombie detectors, sampled every SAMPLE_SECONDS.
+        tasks += [('longsoak', [sys.executable, str(ROOT / 'bench/longsoak.py')],
+                   {'SOAK_SECONDS': env.get('LONGSOAK_SECONDS', '86400'),
+                    'CONTAINER': env['CONTAINER']})]
     if env.get('GROWSOAK') == '1':
         tasks += [('growsoak', [sys.executable, str(ROOT / 'bench/growsoak.py')],
                    {'SOAK_SECONDS': env.get('SOAK_SECONDS', '3600')})]
@@ -177,6 +187,8 @@ def suites(out, env, guard=None):
                 timeout = float(env.get('GSM8K_TIMEOUT', str(timeout)))
             if name in ('soak', 'growsoak'):
                 timeout = float(env.get('SOAK_SECONDS', '3600')) + 300
+            if name == 'longsoak':
+                timeout = float(env.get('LONGSOAK_SECONDS', '86400')) + 1800
             if name == 'mixedload':
                 timeout = float(env.get('MIXEDLOAD_TIMEOUT', str(max(timeout, 1800))))
             rc = bounded(args, out / (name + '.log'), timeout, child_env, guard)

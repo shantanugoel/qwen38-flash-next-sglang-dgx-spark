@@ -56,6 +56,9 @@ and several open upstream stability bugs we have never soaked long enough to see
 
 ### A2. Long soak for MTP acceptance decay (sglang#37326) — measure first
 
+- **Status: DONE 2026-09-15, not reproduced.** 24 h `bench/longsoak.py` soak: probe
+  accept length 3.73–3.80 and decode ~47–50 tok/s flat across all 4 h bands; 8879
+  requests, 0 errors. No watchdog needed. See RESEARCH_LOG "Sep 14 plan — A2/A3/A4".
 - **What:** NEXTN acceptance decays to ~0 over ~16–24 h uptime on this exact
   model. Throughput drops ~3x with no error. Reproduced on GB10 TP1 even with the
   #35821 clamps. A restart restores it. Partial fix #38191 is open.
@@ -69,6 +72,10 @@ and several open upstream stability bugs we have never soaked long enough to see
 
 ### A3. Chunked-prefill + radix insert race corrupting QSA KV (sglang#38319 / #38355)
 
+- **Status: DONE 2026-09-15, not reproduced.** No first token ≥ 248077 across ~370
+  mid-prefill aborts on a shared prefix and 374 probes; 2/128 hit-vs-flush mismatches
+  flipped in opposite directions on a knife-edge prompt (nondeterminism, not
+  corruption). #38355 not overlaid.
 - **What:** retract or abort during chunked-prefill insertion leaves corrupted KV
   pages in the radix tree. Every later request with that prefix emits token
   `248319` on its first decode step until `flush_cache`.
@@ -83,6 +90,9 @@ and several open upstream stability bugs we have never soaked long enough to see
 
 ### A4. Zombie requests after client disconnect (sglang#36333 / #36876)
 
+- **Status: DONE 2026-09-15, partial.** 1581 aborted request ids kept emitting up to
+  105 output steps after disconnect, but 0 slots were held at 128 idle checks.
+  `max_tokens` guidance added to the README.
 - **What:** an abort that lands in the batch-transition window never reaches the
   scheduler. The request decodes to `max_tokens` and holds one of our
   `MAX_RUNNING=4` slots.
@@ -340,7 +350,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | --- | --- | --- | --- |
 | 1 | A1 overlay (#38346) — **done** | 1 boot | removes a latent crash |
 | 2 | B1 + B2 boot fixes — **B1 done (accepted), B2 done (rejected)** | 2–3 boots | boot ~9.5 → ~6.5 min |
-| 3 | A2/A3/A4 24 h soak with detectors | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
+| 3 | A2/A3/A4 24 h soak with detectors — **done** | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
 | 4 | C1 real-text prefill + prefetch A/B | 2 boots | possibly 3–4x prefill at 128k+ |
 | 5 | C2 track interval 256 | 2 boots | possible agentic decode gain |
 | 6 | C3 draft vocab 48k/32k + EN prose bench | 3 boots | possible +5–13% decode |
