@@ -242,6 +242,11 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### C2. `--mamba-track-interval 256` — cheap
 
+- **Status: DONE 2026-09-16, rejected.** Base + two 256 boots with 120-turn: agentic
+  decode is set by the greedy output mode (42 vs 29 tokens/turn), and within a mode
+  256 changes nothing (58.5 vs 58.1 tok/s); decode suite no better; agentic cache hit
+  0.3–1.2 pts lower; prefix-warm TTFT unchanged. Interval stays 64. See RESEARCH_LOG
+  "Sep 14 plan — C2".
 - **Evidence:** SGLang's verified Spark cells (#37995) dropped 64 for the default
   256 with MTP 3/1/4, scoring 97.1% on full GSM8K. Our U5a single boot showed
   thinking-off agentic decode of 58 vs 49 tok/s, never confirmed, and it predates
@@ -361,7 +366,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 2 | B1 + B2 boot fixes — **B1 done (accepted), B2 done (rejected)** | 2–3 boots | boot ~9.5 → ~6.5 min |
 | 3 | A2/A3/A4 24 h soak with detectors — **done** | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
 | 4 | C1 real-text prefill + prefetch A/B — **done (accepted; new MAX_TOTAL follow-up)** | 2 boots | possibly 3–4x prefill at 128k+ |
-| 5 | C2 track interval 256 | 2 boots | possible agentic decode gain |
+| 5 | C2 track interval 256 — **done (rejected)** | 2 boots | possible agentic decode gain |
 | 6 | C3 draft vocab 48k/32k + EN prose bench | 3 boots | possible +5–13% decode |
 | 7 | C4 determinism probe | no boot | explains temp-0 flakiness |
 | 8 | B3 loader profile (py-spy, 16 threads) | 1 boot | decides whether a weight cache is worth it |

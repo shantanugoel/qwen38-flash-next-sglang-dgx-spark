@@ -2988,3 +2988,53 @@ Limits: two or three boots per arm, three prompts per size; 250k unmeasured;
 documents are LongBench-v2 English/code, not multilingual.
 
 Rollback: `SGLANG_QWEN4_PLE_FILE_PREFETCH=0`. Next item: C2.
+
+
+## Sep 14 plan — C2: `--mamba-track-interval 256` (2026-09-16)
+
+**Decision: rejected. The interval stays at 64.** There is no decode or agentic
+gain once output modes are matched, and the agentic cache hit rate is slightly
+lower.
+
+Matched boots, one variable (`MAMBA_TRACK_INTERVAL`), on the current default
+(A1 clamp, B1 draft filter, C1 prefetch).
+`PROFILE=u3 PREFILL=4096 N=3 SIZES=8k,32k,128k PREFILL_BENCH=1 TURNS=120 ONLY=smoke,prefill,quality,decode,longctx,agentic_off,agentic_on`:
+
+| Metric | 64 (base) | 256 | 256 confirm |
+| --- | ---: | ---: | ---: |
+| 120-turn off: completion tok / decode bands | 43 / 58.3–58.7 | 29 / 67.8–68.2 | 42 / 58.0–58.3 |
+| 120-turn off: cache hit bands % | 95.9 / 98.6 / 99.1 | 94.7 / 98.1 / 98.8 | 95.0 / 98.1 / 98.8 |
+| 120-turn on: completion tok / decode bands | 121.5 / 27.8–34.2 | 72.5 / 36.1–39.7 | 67.5 / 37.5–40.2 |
+| Decode off code / prose | 48.20 / 21.80 | 46.13 / 22.33 | 46.31 / 20.75 |
+| Decode on code / prose | 43.06 / 24.92 | 38.78 / 27.29 | 36.00 / 27.40 |
+| Filler cold TTFT 8k / 32k / 128k s | 3.43 / 10.34 / 43.21 | 3.29 / 10.17 / 42.28 | 2.89 / 10.10 / 41.94 |
+| Prefix-warm 8k / 32k / 128k s | 0.28 / 0.33 / 0.66 | 0.32 / 0.32 / 0.63 | 0.29 / 0.33 / 0.66 |
+| Quality / needles (longctx 8k,32k,128k) | 11/12 / pass | 11/12 / 8k refusal | 11/12 / pass |
+| accept len mean (run log) | 2.73 | 3.03 | 3.15 |
+| Boot s / min MemAvailable GiB | 499 / 10.30 | 513 / 10.10 | 511 / 10.69 |
+
+Reading it.
+
+- **Agentic decode is set by the output mode, not the interval.** Thinking-off
+  flips between the 42- and 29-token greedy modes seen since U1. Within a mode
+  the interval changes nothing: 58.5 vs 58.1 tok/s in the 42-token mode, and the
+  256 run's 68 tok/s in the 29-token mode equals stock boots in that mode (A1:
+  67.9–71.0). U5a's single-boot "58 vs 49" was this mode artifact. Thinking-on
+  shows the same confound (121 vs ~70 tokens per turn).
+- **Decode suite:** no gain; code decode is slightly lower on both 256 boots.
+- **Acceptance:** the higher run-wide accept length does not show up in any
+  tok/s measurement and is workload-mix dependent, so it is not counted.
+- **Prefill and cache:** cold filler TTFT is 2–3% lower at 128k, and
+  prefix-warm TTFT at 32k/128k is unchanged (the plan's concern). But
+  multi-turn agentic cache hit is 0.3–1.2 points lower at every band,
+  consistent with coarser mamba checkpoints.
+- **8k needle:** the one 8k needle miss ("not present in the provided text")
+  is the intermittent 8k behaviour seen in earlier prefill logs and passed on
+  the confirm boot.
+
+Under the campaign rule (accept only a consistent improvement with no
+unexplained regression), this is a reject. Limits: one baseline boot; the
+SGLang verified-cell GSM8K result (#37995) was not re-run here.
+
+Rollback: nothing to roll back (`MAMBA_TRACK_INTERVAL` default unchanged).
+Next item: C3.
