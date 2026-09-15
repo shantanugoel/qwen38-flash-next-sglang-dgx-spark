@@ -275,6 +275,12 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### C4. Determinism probe — diagnostic, cheap
 
+- **Status: DONE 2026-09-16.** `CACHE_MODES=miss,hit` in `bench/effort_probe.py`
+  (with `CACHE_PREFIX_TOKENS` so hits are real — a 40-token prompt can never hit a
+  64-token-page cache). Greedy output diverges ~1 in 10 repeats **with an empty
+  cache**, modal sequences match between miss and hit, and code was 10/10 identical
+  on hits: kernel-level nondeterminism, not #34820 cached state. See RESEARCH_LOG
+  "Sep 14 plan — C4".
 - **Evidence:** blazux found vLLM's GB10 QSA top-k non-deterministic, so the same
   greedy prompt gave different outputs. SGLang uses a different `fast_topk`, but
   our `effort_thinking_off` case flips 5/10 at temperature 0.
@@ -374,7 +380,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 4 | C1 real-text prefill + prefetch A/B — **done (accepted; new MAX_TOTAL follow-up)** | 2 boots | possibly 3–4x prefill at 128k+ |
 | 5 | C2 track interval 256 — **done (rejected)** | 2 boots | possible agentic decode gain |
 | 6 | C3 draft vocab 48k/32k + EN prose bench — **done (rejected; EN prose added)** | 3 boots | possible +5–13% decode |
-| 7 | C4 determinism probe | no boot | explains temp-0 flakiness |
+| 7 | C4 determinism probe — **done (kernels, not cache)** | no boot | explains temp-0 flakiness |
 | 8 | B3 loader profile (py-spy, 16 threads) | 1 boot | decides whether a weight cache is worth it |
 | 9 | D1 rebase onto SGLang main | several days | stability fixes; enables D2/D3 |
 | 10 | D2 FP8 hybrid side layers + FP8 `lm_head` | several days | possible +20–28% decode |

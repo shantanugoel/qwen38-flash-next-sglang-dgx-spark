@@ -3094,3 +3094,60 @@ not re-run, so the agentic row is not used for the decision.
 
 Rollback: none needed. The 48k/32k maps and their reports stay in
 `bench/draft_vocab/` as the record. Next item: C4.
+
+
+## Sep 14 plan — C4: determinism probe, cache hit vs cache miss (2026-09-16)
+
+**Finding: the temperature-0 instability is kernel-level, not cached state.
+Diagnostic only; no default changes.**
+
+`bench/effort_probe.py` gains `CACHE_MODES=miss,hit`: the chat prompt is
+rendered with `/tokenize` and sent to `/generate` greedy, and full output id
+sequences are compared. `miss` calls `/flush_cache` before every repeat; `hit`
+never flushes. Two prompts: the unstable `effort_thinking_off` case and a code
+prompt.
+
+The first run (`c4-determinism-20260916`) showed `cached=0` in **both** modes:
+the radix cache stores whole 64-token pages, and a ~40-token prompt can never
+be a hit, so that run is two miss arms. It is still informative — with an empty
+cache, the same greedy prompt gave **3 distinct sequences in 10** (effort,
+diverging at position 1; code at 9 and 22).
+
+`CACHE_PREFIX_TOKENS` then prepends a fixed LongBench-v2 document so hits are
+real (`c4-determinism-prefix-20260916`, 3206–3238 token prompts,
+`cached=3200` on every hit):
+
+| Arm | distinct sequences / 10 | largest class | outlier repeats |
+| --- | ---: | ---: | --- |
+| effort, miss (flush each) | 2 | 9 | repeat 0 answered `28`, rest `24` |
+| effort, hit | 2 | 9 | repeat 8 answered `27` |
+| code, miss | 2 | 9 | repeat 5 |
+| code, hit | **1** | 10 | none |
+| miss vs hit modal sequence | identical for both prompts | | |
+
+Reading it against the plan's own rule — divergence without the cache points at
+kernels, divergence only with the cache points at #34820-style state precision:
+
+- Divergence happens **with an empty cache**, at ~1 in 10 repeats, so kernels
+  (or their non-associative reduction order / `fast_topk` ties) are implicated.
+  This matches blazux's report that GB10 QSA top-k is non-deterministic.
+- The cache-hit arms are not worse — code was 10/10 identical — and the modal
+  sequence is the same in both modes, so restoring mamba checkpoints from the
+  radix cache is not introducing the flips. #34820 is not indicated here.
+- The `effort` prompt is genuinely knife-edge: a single flipped token at
+  position 1 changes the answer between 24, 27 and 28. That is the quality
+  suite's long-standing `effort_thinking_off` case, and it explains A1's
+  chunk-tail resend observation (6/6, 4/6, 2/6 reproduction across boots) and
+  A3's two hit-vs-flush mismatches, which went in opposite directions.
+- The first request after a boot/flush is a plausible extra factor (the
+  `effort` miss outlier was repeat 0), not established here.
+
+Consequence for the campaign: single-sample greedy comparisons on these
+prompts cannot resolve small differences, which is why the quality suite's
+11/12 vs 12/12 keeps moving without any configuration change.
+
+Limits: ten repeats, two prompts, one boot; no attempt to identify which kernel
+(a deterministic-inference flag, `--enable-deterministic-inference`, exists
+upstream and was not tested).
+
+Rollback: none; probe-only. Next item: B3 loader profile.
