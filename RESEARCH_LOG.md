@@ -3038,3 +3038,59 @@ SGLang verified-cell GSM8K result (#37995) was not re-run here.
 
 Rollback: nothing to roll back (`MAMBA_TRACK_INTERVAL` default unchanged).
 Next item: C3.
+
+
+## Sep 14 plan — C3: smaller draft vocabularies and an English prose case (2026-09-16)
+
+**Decision: the 48k and 32k maps are rejected; `hot_tokens_64k.pt` stays the
+default. The English prose decode case is added and kept.**
+
+`bench/decode.py` gains `prose_en` (Spanish kept) and, with `CONTAINER` set,
+records each task's mean server `accept len` over its own samples.
+`scripts/slice_draft_vocab.py` cuts a smaller map as a **prefix of the ranked
+64k map** (specials, then corpus ids by frequency, then id-order fill), so a
+size A/B is one variable: no new corpus and no Wikipedia sampling. 48k keeps
+all 44301 corpus-ranked ids plus 3666 fill; 32k is 32735 corpus-ranked ids and
+no fill.
+
+Matched boots, one variable (`SPECULATIVE_TOKEN_MAP`), `PROFILE=u3 N=5 TURNS=40
+ONLY=smoke,quality,decode,agentic_off`:
+
+| Task | 64k median (range) / accept | 48k | 32k |
+| --- | --- | --- | --- |
+| off code_en | **47.86** (45.69–48.79) / 3.75 | 48.45 (47.01–51.62) / 3.81 | 49.39 (45.86–51.19) / 3.77 |
+| off prose_es | **22.07** (20.69–23.79) / 1.88 | 21.93 (18.63–23.61) / 1.78 | 18.58 (17.04–20.21) / **1.56** |
+| off prose_en | **22.39** (21.62–25.27) / 2.18 | 24.05 (22.81–26.05) / 2.15 | 25.07 (22.29–28.17) / 2.14 |
+| on code_en | 39.22 (36.90–42.07) / 3.17 | 40.53 (38.00–45.66) / 3.21 | 37.36 (31.76–42.70) / 2.95 |
+| on prose_es | 27.45 (26.27–28.52) / 2.33 | 26.03 (23.21–28.70) / 2.14 | 22.59 (20.26–23.82) / 1.88 |
+| on prose_en | 29.97 (28.79–34.45) / 2.62 | 28.82 (27.62–31.87) / 2.41 | 27.25 (25.27–30.41) / 2.37 |
+| 40-turn off: invalid / recall / decode bands | 0 / pass / 51–55 | 0 / pass / 62–70 | 0 / pass / 61 |
+| Quality | 11/12 | 12/12 | 11/12 |
+| accept len mean (run log) | 2.703 | 2.638 | 2.403 |
+
+Against the predeclared gate — medians must not overlap, and acceptance must
+not fall in any category by more than it gains:
+
+- **48k:** code +1.2% with fully overlapping ranges (45.7–48.8 vs 47.0–51.6),
+  Spanish prose −0.6% with acceptance 1.88 → 1.78, thinking-on Spanish −5%.
+  Inconclusive on the metric it was supposed to win, and negative elsewhere.
+- **32k:** Spanish prose **−16%** (acceptance −17%), thinking-on code −4.7%
+  and Spanish −18%. Clear reject.
+- The trend is consistent and explains itself: trimming the tail of a
+  frequency ranking built mostly from English/code corpora costs the most on
+  non-English text, where those ids are drafted. MiaAI's +13% was a
+  code-tuned vocabulary on a different stack, and it does not transfer here.
+
+**English prose is not faster than Spanish on this recipe:** 22.39 vs 22.07
+tok/s thinking-off and 29.97 vs 27.45 thinking-on, on the same shaped prompt.
+So the 37–49 tok/s English prose figures quoted from vLLM recipes are not
+explained by our prompts being Spanish; the gap is elsewhere (or not
+comparable). The plan's "not comparable" caveat can now be replaced with a
+measurement.
+
+Limits: five repeats per task on one boot per size; the 64k boot's 40-turn
+agentic decode (51–55 tok/s at 31 tokens/turn) is below its usual band and was
+not re-run, so the agentic row is not used for the decision.
+
+Rollback: none needed. The 48k/32k maps and their reports stay in
+`bench/draft_vocab/` as the record. Next item: C4.

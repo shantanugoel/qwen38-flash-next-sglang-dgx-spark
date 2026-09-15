@@ -1,0 +1,9 @@
+{
+  "source": "bench/draft_vocab/hot_tokens_64k.pt",
+  "requested_size": 32768,
+  "n_final": 32768,
+  "n_special": 33,
+  "n_corpus_ranked": 32735,
+  "n_fill": 0,
+  "unique": 32768
+}

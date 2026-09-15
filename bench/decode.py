@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Decode speed: code EN + prose, thinking on/off. Hashd1ve-shaped protocol.
+"""Decode speed: code EN + prose ES/EN, thinking on/off. Hashd1ve-shaped protocol.
+
+With CONTAINER set, each task also records the server's mean `accept len`
+over its samples (decode-batch log lines).
 
     N=3 python3 bench/decode.py
     THINKING=off N=3 python3 bench/decode.py
@@ -27,7 +30,29 @@ PROMPTS = [
         "prose_es",
         "Explica en tres frases que es la prescripcion de una sancion administrativa.",
     ),
+    # English prose, so decode numbers are comparable with recipes that only
+    # report English prompts (C3). Spanish stays for continuity.
+    (
+        "prose_en",
+        "Explain in three sentences what the statute of limitations for an "
+        "administrative penalty is.",
+    ),
 ]
+CONTAINER = os.environ.get("CONTAINER", "")
+
+
+def accept_lens_since(since: str) -> list[float]:
+    """The server's `accept len` decode-batch values logged since `since`."""
+    if not CONTAINER:
+        return []
+    import re
+    import subprocess
+    try:
+        proc = subprocess.run(["docker", "logs", "--since", since, CONTAINER],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [float(x) for x in re.findall(r"accept len: ([0-9.]+)", proc.stdout + proc.stderr)]
 
 
 def run_one(prompt: str, thinking: bool):
@@ -53,12 +78,17 @@ def sweep(thinking: bool) -> dict:
     for name, prompt in PROMPTS:
         print(f">> warmup {label} {name}", flush=True)
         run_one(prompt, thinking)
+        from datetime import datetime, timezone
+        since = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         samples = []
         for i in range(N):
             print(f">> {label} {name} {i+1}/{N}", flush=True)
             samples.append(run_one(prompt, thinking))
         rates = [s["tok_s"] for s in samples]
+        accepts = accept_lens_since(since)
         out["tasks"][name] = {
+            "accept_len_mean": round(statistics.mean(accepts), 3) if accepts else None,
+            "accept_len_lines": len(accepts),
             "median_tok_s": round(statistics.median(rates), 2),
             "min_tok_s": round(min(rates), 2),
             "max_tok_s": round(max(rates), 2),

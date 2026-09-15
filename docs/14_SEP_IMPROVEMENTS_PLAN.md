@@ -19,7 +19,7 @@ protocol: one `TAG=… ./scripts/run_config.sh` per variable, a log entry in
 | --- | ---: | ---: |
 | Code decode, 1 stream | **47.6 tok/s** | 45.8 (madeye, vLLM); 55.4 with INT4 experts (Code Turbo) |
 | Agentic tool-JSON decode | **68 tok/s** | ~60 (AutoRound fork) |
-| Prose decode | 22 tok/s (**Spanish** prompts) | 37–49 (English prompts, vLLM) — not comparable |
+| Prose decode | 22 tok/s Spanish, **22.4 English** (C3) | 37–49 (English prompts, vLLM) |
 | Prefill at ~32k | ~2,260 tok/s | 2,300–3,000 |
 | Prefill at ~250k, real text | **~440 tok/s** | ~1,940 (MiaAI, vLLM) |
 | SGLang's own verified 1x Spark cell | — | 27.5 tok/s (random ISL 1024) |
@@ -257,6 +257,12 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### C3. Smaller draft vocabulary + English prose bench — cheap
 
+- **Status: DONE 2026-09-16, rejected (maps); EN prose case kept.** 48k/32k cut as
+  prefixes of the ranked 64k map (`scripts/slice_draft_vocab.py`). Code decode gains are
+  inside overlapping ranges (47.9/48.5/49.4) while Spanish prose falls 22.1 → 21.9 → 18.6
+  with acceptance 1.88 → 1.78 → 1.56. **English prose is no faster than Spanish**
+  (22.4 vs 22.1 off), so the recipe's prose numbers were never a language artifact.
+  See RESEARCH_LOG "Sep 14 plan — C3".
 - **Evidence:** MiaAI's 47,149-token code-tuned draft vocab gave +13% over the full
   head. Our 64k map is the only size we measured.
 - **Plan:**
@@ -367,7 +373,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 3 | A2/A3/A4 24 h soak with detectors — **done** | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
 | 4 | C1 real-text prefill + prefetch A/B — **done (accepted; new MAX_TOTAL follow-up)** | 2 boots | possibly 3–4x prefill at 128k+ |
 | 5 | C2 track interval 256 — **done (rejected)** | 2 boots | possible agentic decode gain |
-| 6 | C3 draft vocab 48k/32k + EN prose bench | 3 boots | possible +5–13% decode |
+| 6 | C3 draft vocab 48k/32k + EN prose bench — **done (rejected; EN prose added)** | 3 boots | possible +5–13% decode |
 | 7 | C4 determinism probe | no boot | explains temp-0 flakiness |
 | 8 | B3 loader profile (py-spy, 16 threads) | 1 boot | decides whether a weight cache is worth it |
 | 9 | D1 rebase onto SGLang main | several days | stability fixes; enables D2/D3 |
