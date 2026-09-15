@@ -210,6 +210,15 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### C1. Long-context prefill cliff: re-test PLE prefetch on real text — high value, cheap
 
+- **Status: DONE 2026-09-16, accepted.** `SGLANG_QWEN4_PLE_FILE_PREFETCH=1` is now the
+  default. Real-text cold TTFT on identical LongBench-v2 prompts: 32k 85–112 s → 19–27 s,
+  128k 413–569 s → 144–289 s; warm paths, mixed load, decode and quality unchanged.
+  The threaded `pread` prototype did not beat WILLNEED (rejected). **250k fresh real text
+  is not servable safely either way:** the KV pool commits lazily on unified memory
+  (~24.8 KiB/token), so ~155–190k prefilled tokens exhaust the headroom (watchdog floor
+  and NVRM OOM). **New follow-up needed: size `MAX_TOTAL` to committable memory** — a
+  full 524k radix cache would need ~13 GiB more than boot leaves. See RESEARCH_LOG
+  "Sep 14 plan — C1".
 - **Evidence:**
   - Our 248k LongBench-v2 run averaged ~440 tok/s, with engine batches at
     308–607 tok/s. vLLM recipes report ~1,940 tok/s at 256k (MiaAI) and
@@ -351,7 +360,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 1 | A1 overlay (#38346) — **done** | 1 boot | removes a latent crash |
 | 2 | B1 + B2 boot fixes — **B1 done (accepted), B2 done (rejected)** | 2–3 boots | boot ~9.5 → ~6.5 min |
 | 3 | A2/A3/A4 24 h soak with detectors — **done** | 1 day, unattended | finds or rules out decay, KV corruption, zombies |
-| 4 | C1 real-text prefill + prefetch A/B | 2 boots | possibly 3–4x prefill at 128k+ |
+| 4 | C1 real-text prefill + prefetch A/B — **done (accepted; new MAX_TOTAL follow-up)** | 2 boots | possibly 3–4x prefill at 128k+ |
 | 5 | C2 track interval 256 | 2 boots | possible agentic decode gain |
 | 6 | C3 draft vocab 48k/32k + EN prose bench | 3 boots | possible +5–13% decode |
 | 7 | C4 determinism probe | no boot | explains temp-0 flakiness |

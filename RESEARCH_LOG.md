@@ -2891,3 +2891,100 @@ so a request lost entirely before logging would only show as a held slot
 (never observed).
 
 Rollback: nothing changed in serving. Next item: C1.
+
+
+## Sep 14 plan — C1: real-text long prefill and PLE prefetch (2026-09-15/16)
+
+**Decision: accepted. `SGLANG_QWEN4_PLE_FILE_PREFETCH=1` (upstream WILLNEED
+prefetch) is now the default in `serve.sh` and the u3 profile. This reverses
+U4b.** Separately, fresh 250k real-text prefill turned out to be beyond this
+box's safe memory at `MAX_TOTAL=524288`, for a reason that also matters outside
+prefill (lazily committed KV, below).
+
+Why U4b missed it, confirmed: its filler prompts share n-grams, so the PLE
+table was warm by construction. `bench/prefill.py` gains `PREFILL_TEXT=real`.
+Each prompt is built from LongBench-v2 documents not used earlier in the run,
+with a mid-prompt needle, sized by the server's `/tokenize` (bisection on the
+cut point), and seeded by `PREFILL_SEED` so arms can share documents. Every
+repeat is then PLE-cold, like real long-document traffic. An early version drew
+new documents on every sizing retry and crashed on an oversize prompt;
+`results/c1-prefetch-off-20260915-sizing-bug` is that run, not data.
+
+Why it is slow, observed live during a cold 128k prompt without prefetch:
+~16 MiB/s of disk reads with one blocked task, i.e. ~4k serial 4 KiB page
+faults per second from the gather kernel (MADV_RANDOM, no readahead).
+
+Matched arms on **identical documents** (`PREFILL_SEED=c1-b`),
+`PROFILE=u3 PREFILL=4096 PREFILL_BENCH=1 PREFILL_TEXT=real SIZES=32k,128k PREFILL_N=3 MIXEDLOAD=1 ONLY=smoke,prefill,mixedload,quality,decode`:
+
+| Real-text TTFT s (3 fresh prompts) | prefetch off | WILLNEED run 1 | WILLNEED run 2 | pread run 1 | pread run 2 |
+| --- | --- | --- | --- | --- | --- |
+| ~31.5k tokens | 112 / 85 / 96 | 20 / 20 / 26 | 19 / 22 / 27 | 25 / 23 / 29 | 25 / 23 / 31 |
+| ~126k tokens | 413 / 525 / 569 | 151 / 270 / 280 | 144 / 195 / 289 | 158 / 211 / 202 | 169 / 362 / 240 |
+| prefix-warm 32k / 128k | 0.37 / 0.70 | 0.37 / 0.67 | 0.38 / 0.70 | 0.37 / 0.67 | 0.47 / 0.64 |
+| Needles | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 |
+
+(WILLNEED run 1 is `c1-prefetch-on-20260915`, which also used seed `c1-b` and
+tripped at 250k after these sizes.)
+
+- **32k:** WILLNEED is **4–5x** faster cold (19–27 s vs 85–112 s; 1,200–1,600
+  vs 280–370 tok/s).
+- **128k:** **2–3x** (144–289 s vs 413–569 s).
+- **Still room above:** later 128k prompts in a run slow down (see memory
+  below), so filler-warm speed (~3,000 tok/s at 128k) is not reached.
+
+Plan step 3 was prototyped as `patches/ple_pread_prefetch.py`: a synchronous
+16-thread `pread` of each chunk's distinct pages before the gather. It did not
+beat WILLNEED in two runs (medians 211 and 240 s vs 270 and 195 s at 128k,
+slightly slower at 32k). **Rejected**; kept as an unapplied record.
+
+Gates, no regression. The filler/warm paths use the confirm boot
+`c1-willneed-confirm-20260916` (`SIZES=8k,32k MIXEDLOAD=1 ONLY=smoke,quality,decode,longctx,mixedload`):
+
+| Gate | prefetch off (`c1-off-gate`) | WILLNEED gate run | WILLNEED confirm |
+| --- | ---: | ---: | ---: |
+| Mixed 64k prefill TTFT s | 28.32 | 29.64 | 28.45 |
+| Mixed p95 decode stall s | 26.16 | 27.39 | 26.18 |
+| Decode off code / prose tok/s | 48.06 / 20.73 | 45.69 / 17.54 | 46.78 / 21.90 |
+| Decode on code / prose tok/s | 34.80 / 24.49 | 40.44 / 22.72 | 37.32 / 27.76 |
+| Filler cold TTFT 8k / 32k s | — | — | 2.85 / 10.36 |
+| Quality | 11/12 | 11/12 | 11/12 |
+| Min MemAvailable GiB | 8.47 | 8.72 | 10.16 |
+
+The gate run's low prose-off decode (17.5 twice) and +4.7% stall did not
+reproduce on the confirm boot. Decode-sized gathers (<2048 rows) skip the
+prefetcher entirely, so neither was expected to move.
+
+**250k fresh real text: not servable safely on this recipe, with or without
+prefetch.**
+
+- **Off arm:** tripped the memory watchdog during its first 250k prompt, after
+  throughput collapsed to 68–100 tok/s past ~190k tokens.
+- **WILLNEED arms:** the chain arm tripped the same way.
+- **Single-prompt diagnostic** (fresh boot, 10 s host sampler): prefill reached
+  ~190k tokens at ~900 tok/s, then hit the 6 GiB floor.
+- **Floor lowered to 3 GiB:** tripped at ~155k tokens on kernel
+  `NVRM ... NV_ERR_NO_MEMORY` allocation failures, while MemAvailable still
+  read 8.3 GiB.
+
+The cause is the finding worth carrying forward. **The KV pool is committed
+lazily on unified memory.** It is sized for 524288 tokens (12 GB K+V + 1 GB
+draft), but its pages only become resident when written. In the diagnostic,
+MemAvailable fell 4.9 GiB over ~190k prefilled tokens, which matches ~24.8
+KiB/token of KV, while host anon pages (~7.1 GiB) and the PLE mapping (≤6 GiB)
+did not grow. Boot leaves ~10.3 GiB available with an empty pool, so:
+
+- one full 262k context would leave ~4 GiB;
+- a radix cache that fills the whole 524k pool would need ~13 GiB;
+- before either, the PLE page cache is squeezed out, which is the long-context
+  "prefill cliff" (the plan's ~440 tok/s at 250k).
+
+None of the earlier suites filled the pool (the 24 h soak flushed the cache
+every 10 minutes), so this was never observed. It is **not fixed here**; it
+needs its own item (a `MAX_TOTAL` sized to what can actually be committed,
+e.g. ~300k, or equivalent headroom), measured with a pool-filling workload.
+
+Limits: two or three boots per arm, three prompts per size; 250k unmeasured;
+documents are LongBench-v2 English/code, not multilingual.
+
+Rollback: `SGLANG_QWEN4_PLE_FILE_PREFETCH=0`. Next item: C2.

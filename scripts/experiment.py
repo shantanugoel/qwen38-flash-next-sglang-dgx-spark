@@ -402,7 +402,7 @@ def run(out, env):
                 'file-backed mmap', 'reusing recipe backing file',
                 'WILLNEED prefetch', 'RSS trimmer', 'resident set capped',
                 'trimmed resident', 'speculative-token-map',
-                'Checkpoint key filter', 'skipped checkpoint files')))
+                'Checkpoint key filter', 'skipped checkpoint files', 'pread prefetch')))
         (out / 'boot-facts.txt').write_text(facts)
         # Shard progress bars (tqdm redraws with \r) timestamp the load phases.
         progress = [part.strip() for line in boot_log.splitlines()
@@ -537,7 +537,7 @@ def main():
             env.setdefault('QSA_KERNEL_CHECK', '1')
             env.setdefault('SOAK_SECONDS', '3600')
             default_if_blank(env, 'PLE_OFFLOAD_BACKEND', 'file')
-            env.setdefault('SGLANG_QWEN4_PLE_FILE_PREFETCH', '0')
+            env.setdefault('SGLANG_QWEN4_PLE_FILE_PREFETCH', '1')
             env.setdefault('SGLANG_QWEN4_PLE_FILE_RSS_BUDGET_GB', '0')
         try:
             if sys.argv[1:] == ['run']:

@@ -126,9 +126,14 @@ gave no measurable speedup, so it is off by default.
 
 - **262k is the maximum context.** 512k was attempted and does not work with this
   checkpoint.
-- **Long prompts are slow to prefill.** Prefill speed drops as context grows: a
-  near-full 262k prompt takes several minutes before the first token. Follow-up
-  requests that share a prefix are fast thanks to the prefix cache.
+- **Long prompts are slow to prefill.** Prefill speed drops as context grows, and new
+  documents are slower than repeated text because the PLE table has to be read from
+  disk: with the default page prefetch, a fresh ~128k-token document takes ~2.5–5 min
+  before the first token (~20–30 s at 32k). Follow-up requests that share a prefix are
+  fast thanks to the prefix cache.
+- **Very long fresh prompts can run out of memory.** The KV cache is committed as it
+  fills, and on this unified-memory box a fresh prompt past ~150–190k tokens exhausts
+  the remaining headroom. Keep single prompts well under the 262k limit.
 - **A long prefill stalls other streams.** While one request is prefilling, decode on
   other concurrent requests pauses until it finishes.
 - **Short arithmetic with thinking off is unreliable.** The model sometimes asserts a
