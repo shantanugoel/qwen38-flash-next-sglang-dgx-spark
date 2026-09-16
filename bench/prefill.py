@@ -33,7 +33,8 @@ FILLER = (
     "paragraph is the secret. "
 )
 MAPPING = {"8k": 8000, "32k": 32000, "40k": 40000, "120k": 120000,
-           "128k": 128000, "190k": 190000, "210k": 210000, "250k": 250000}
+           "128k": 128000, "190k": 190000, "210k": 210000, "250k": 250000,
+           "300k": 300000, "400k": 400000, "500k": 500000, "600k": 600000}
 TEXT = os.environ.get("PREFILL_TEXT", "filler").lower()
 LONGBENCH_JSON = os.environ.get("LONGBENCH_JSON", os.path.expanduser(
     "~/ai/cache/huggingface/hub/datasets--THUDM--LongBench-v2/snapshots/"

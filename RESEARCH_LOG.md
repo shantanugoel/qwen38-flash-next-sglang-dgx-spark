@@ -3404,3 +3404,71 @@ theoretical ceiling is not reached.
 
 Rollback: serve the stock checkpoint (unchanged default); delete
 `data/d2-fp8-hybrid` and `data/d2-ple-fp8`. Next item: D3.
+
+
+## Sep 14 plan — D3: 512k context (2026-09-16)
+
+**Decision: accepted as a documented optional mode; 262k BF16 KV stays the
+default.** A 524288 context boots and serves, and needle recall is verified at
+**294,485 tokens** — past the native 262,144. Two things did not go as the plan
+assumed: the YaRN override turned out to be unnecessary, and the practical
+ceiling is ~340–350k tokens, not 512k.
+
+Configuration that works (on the D1 pin):
+
+    CONTEXT=524288 MAX_TOTAL=524288 SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 \
+      EXTRA_ARGS="--kv-cache-dtype fp8_e4m3"
+
+FP8 KV is what makes it fit: KV drops from 6.00+6.00 GB to 3.00+3.00 GB (plus
+draft 0.25+0.25), and available GPU memory after graph capture rises from
+~12–13 GB to **18.73 GB**. `--kv-cache-dtype fp8_e4m3` also works with QSA now,
+which it did not before (#38851/#38855 came in with the D1 rebase; blazux had
+reported FP8 KV refused on the older stack).
+
+**The YaRN override does nothing here.** U11 failed because its override
+targeted `rope_scaling`; the checkpoint keeps sectioned mrope under
+`text_config.rope_parameters`. This item built the correct override (SGLang
+merges only one level, so the whole `rope_parameters` dict must be supplied
+with `mrope_section`/`mrope_interleaved` preserved) — and then the control boot
+**without** it recalled the same 294,485-token needle just as well:
+
+| Run | 294,485-token needle | TTFT |
+| --- | --- | ---: |
+| 512k + FP8 KV + YaRN override | PASS (`7K-QUARTZ-19`) | 139.46 s |
+| 512k + FP8 KV, **no override** | PASS (`7K-QUARTZ-19`) | 140.10 s |
+
+transformers logs `rope_type='default'` in both cases, so the model is
+extrapolating at this depth rather than using YaRN. The override is therefore
+not part of the recommendation.
+
+Measured at 512k + FP8 KV (vs the 262k BF16 default on the same pin):
+
+| Metric | 262k BF16 KV | 512k FP8 KV |
+| --- | ---: | ---: |
+| Needles 8k / 32k | pass | pass |
+| Needle 250k label (184,055 tok) / 300k label (220,865) / 400k label (294,485) | not run | **pass / pass / pass** |
+| Prefix-warm speedup at those sizes | — | 99x / 129x / 144x |
+| Decode off code / prose ES / prose EN | 46.62 / 19.66 / 23.24 | 44.83 / 20.54 / 19.98 |
+| Decode on code / prose EN | 40.39 / 32.26 | 37.59 / 27.30 |
+| Cold TTFT 8k / 32k s | 3.30 / 10.05 | 3.32 / 9.89 |
+| KV size / available after capture | 12.0 GB / 12.5 GB | **6.5 GB / 18.73 GB** |
+| Quality | 11/12 | **12/12** |
+
+Decode costs about 4–10% (blazux measured −10% for FP8 KV), which is why 262k
+BF16 stays the default.
+
+**Where it stops.** A single 500k-label prompt (~370k tokens) reached ~346k
+committed tokens (`full token usage 0.66`) and then hit kernel
+`NVRM ... NV_ERR_NO_MEMORY`; the fresh **real-text** 250k-label prefill from C1
+tripped the memory floor earlier still. So the usable single-prompt depth is
+roughly 294k verified, ~340–350k hard ceiling, and long fresh-document prefill
+remains limited by the lazily committed KV plus GPU-side prefill allocations
+(see C1). 512k is a context *length*, not a servable prompt size, on this box.
+
+Limits: one boot per configuration; one needle per size and a single filler
+haystack; no GSM8K/agentic at long context; nothing measured between 294k and
+346k; FP8 KV quality checked only by the 12-case suite and needles, not by a
+long-context quality benchmark.
+
+Rollback: none needed; the default is unchanged. Next item: the plan's last
+entry, the B3 weight cache.

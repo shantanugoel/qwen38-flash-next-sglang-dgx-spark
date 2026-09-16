@@ -359,6 +359,13 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### D3. 512k context — optional
 
+- **Status: DONE 2026-09-16, accepted as an optional mode; 262k stays default.**
+  `CONTEXT=524288 --kv-cache-dtype fp8_e4m3` boots and recalls a needle at **294,485
+  tokens**; KV 12.0 → 6.5 GB and available memory 12.5 → 18.73 GB. **The YaRN override
+  is unnecessary** — a control boot without it passed the same needle identically
+  (rope stays `default`; the model extrapolates). Costs ~4–10% decode. Hard ceiling is
+  ~340–350k tokens per prompt (driver OOM), and fresh real-text prefill is limited
+  earlier. See RESEARCH_LOG "Sep 14 plan — D3".
 - **Evidence:** our 512k attempt failed because the YaRN override targeted
   `rope_scaling`. MiaAI deep-merges YaRN into `text_config.rope_parameters`,
   keeping `mrope_section`, and passed 3/3 needles at 400k. Our 512k boot also
@@ -406,7 +413,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 8 | B3 loader profile (py-spy, 16 threads) — **done (weight-loader bound; 16 threads rejected)** | 1 boot | decides whether a weight cache is worth it |
 | 9 | D1 rebase onto SGLang main — **done (accepted)** | several days | stability fixes; enables D2/D3 |
 | 10 | D2 FP8 hybrid side layers + FP8 `lm_head` — **done (accepted, opt-in; no FP8 lm_head)** | several days | possible +20–28% decode |
-| 11 | D3 512k (optional) | 2–3 boots | context beyond 262k |
+| 11 | D3 512k (optional) — **done (optional mode; YaRN not needed)** | 2–3 boots | context beyond 262k |
 | 12 | B3 weight cache (if the profile supports it) | days | boot ~6.5 → ~2–3 min |
 
 Items 1–8 stay on the current pin and can be accepted independently. Items 9–12
