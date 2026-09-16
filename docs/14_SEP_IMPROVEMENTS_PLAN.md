@@ -187,6 +187,11 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### B3. Profile the remaining ~300 s before building anything
 
+- **Item 12 status: DONE 2026-09-16, rejected.** The built-in presharded weight cache
+  needed three fixes to run here (exclude the PLE table, let PRESHARDED win over the
+  ModelOpt loader, keep the draft on the normal loader) and then loaded *slower*:
+  463.8/483.1 s vs 385–408 s, boot 595–608 s vs 501–522 s. `patches/presharded_skip_ple.py`
+  kept unapplied. See RESEARCH_LOG "item 12".
 - **Status: DONE 2026-09-16 (profile + threads A/B).** py-spy (needs `SERVE_PTRACE=1`
   and `docker exec -u 0`) shows the main thread in FusedMoE/linear/embedding
   `weight_loader` calls in every sample, with reader threads idle: per-tensor copy
@@ -414,7 +419,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 9 | D1 rebase onto SGLang main — **done (accepted)** | several days | stability fixes; enables D2/D3 |
 | 10 | D2 FP8 hybrid side layers + FP8 `lm_head` — **done (accepted, opt-in; no FP8 lm_head)** | several days | possible +20–28% decode |
 | 11 | D3 512k (optional) — **done (optional mode; YaRN not needed)** | 2–3 boots | context beyond 262k |
-| 12 | B3 weight cache (if the profile supports it) | days | boot ~6.5 → ~2–3 min |
+| 12 | B3 weight cache (if the profile supports it) — **done (rejected: slower)** | days | boot ~6.5 → ~2–3 min |
 
 Items 1–8 stay on the current pin and can be accepted independently. Items 9–12
 are ordered after the rebase because they depend on its loader and kernels.

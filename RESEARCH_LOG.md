@@ -3472,3 +3472,55 @@ long-context quality benchmark.
 
 Rollback: none needed; the default is unchanged. Next item: the plan's last
 entry, the B3 weight cache.
+
+
+## Sep 14 plan — item 12: post-load weight cache (2026-09-16)
+
+**Decision: rejected. The cache works and serves correctly, but it is slower
+than re-running the loaders.** `patches/presharded_skip_ple.py` stays in the
+repo, unapplied, as the record.
+
+B3's profile said the main load is per-tensor `weight_loader` work, so a
+post-load cache was the only remaining lever. This build ships one:
+`--load-format presharded` (`PreshardedModelLoader`) dumps post-processed
+weights and reloads them. Three things had to be fixed before it would run at
+all on this recipe, all in `patches/presharded_skip_ple.py`:
+
+1. **The PLE table must not enter the cache.** It is a 47.7 GiB host mmap whose
+   backing file already survives restarts, so dumping it would write the table
+   twice and reloading would materialise it as ordinary memory, undoing
+   `--ple-offload-backend file`. The patch drops `*.ngram_embedding.weight`
+   from the dump and from the load-time missing-parameter check; by then
+   `allocate_ple_host_table` has already mapped the verified rows.
+2. **`get_model_loader` never reaches `PRESHARDED` for a ModelOpt checkpoint**
+   — it returns `ModelOptModelLoader` first, which then rejects
+   `presharded_path` as an unknown extra-config key. The patch tests
+   `LoadFormat.PRESHARDED` before the ModelOpt branch.
+3. **The NEXTN draft cannot load through this format** (`Cannot find any model
+   weights`), so serving pins `--speculative-draft-load-format auto`, and the
+   extra-config validator has to tolerate the two presharded keys it is handed.
+
+With that, the cache builds (74 GiB, `READY`) and a later boot logs `Loading
+from presharded checkpoint` and serves normally (smoke, quality 11/12, decode
+in range). It is simply not faster:
+
+| Boot | Target load s | Draft load s | Boot s |
+| --- | ---: | ---: | ---: |
+| Normal path (3 boots, B3) | 385.6 / 398.7 / 407.6 | 31.4–32.7 | 500.6 / 510.4 / 522.3 |
+| **From cache (2 boots)** | **463.8 / 483.1** | 40.8 / 42.0 | **595.0 / 607.5** |
+
+Reading it: on this unified-memory box the normal path's cost is not disk, so
+replacing it with a 74 GiB read of already-assembled tensors adds work rather
+than removing it — every cached tensor still has to be read and placed, and the
+saving (skipping fused-MoE assembly) does not cover that. The plan's hope that
+"B3 might reach ~2–3 min" does not survive contact: boot went the wrong way by
+~85 s.
+
+What did help boot in this campaign: B1 (−50 to −58 s) and, incidentally, D2
+(466 s, because 4.8 GB less weight is read).
+
+Limits: two cached boots; no attempt to tune `max_file_bytes`, to keep the
+cache in page cache, or to store it on a different device; `verify_on_load`
+was left off.
+
+Rollback: nothing applied; `data/weight-cache` (74 GiB) was deleted.
