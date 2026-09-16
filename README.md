@@ -16,14 +16,35 @@ Single stream on one GB10, default settings, thinking off unless noted.
 | Decode, agentic tool-calling session | ~68 tok/s |
 | Time to first token, 32k prompt (cold / cached prefix) | 10.0 s / 0.4 s |
 | Time to first token, 128k prompt (cold / cached prefix) | 38–41 s / 0.4 s |
-| Time to first token, fresh 128k **document** (cold) | 2.5–5 min |
+| Time to first token, fresh 32k / 128k **document** (cold) | 19–27 s / 2.5–5 min |
 | 4 concurrent streams, aggregate | ~130 tok/s |
+| Cold start (embedding table already built) | ~8.5–9 min |
 | GSM8K (n=200) | 97.5% |
 | BFCL subset (80 single-turn cases) | 72.5% |
 | Invalid tool calls across ~600 tool turns | 0 |
 
 Long agent sessions stay fast: over a 120-turn tool-calling session, TTFT and decode
-speed stay flat as the context grows, because the prefix cache hits ~99%.
+speed stay flat as the context grows, because the prefix cache hits ~99%. A 24-hour
+mixed-load soak ran 8,879 requests with no errors and no slowdown.
+
+### Two optional modes
+
+Both are off by default. Each is one setting plus, for the first, a one-off local build.
+
+| | Default | FP8 hybrid weights | 512k context |
+| --- | ---: | ---: | ---: |
+| Decode, code | ~47 tok/s | **~55 tok/s** | ~45 tok/s |
+| Decode, prose | ~22 tok/s | **~25 tok/s** | ~21 tok/s |
+| Decode, agentic session | ~68 tok/s | **~76 tok/s** | — |
+| Single stream / 4 streams | 48 / 130 tok/s | **56 / 137 tok/s** | — |
+| Cold start | ~8.5–9 min | **~7.8 min** | ~8.6 min |
+| Longest prompt with verified recall | 262k limit | 262k limit | **294k tokens** |
+| GSM8K (n=200) | 97.5% | 98.0% | not run (12/12 on the short suite) |
+| Cost | — | ~3% slower prefill; 13 GB disk + a copy of the embedding table | 4–10% slower decode |
+
+`scripts/build_fp8_hybrid_snapshot.py` builds the FP8 hybrid checkpoint (~30 min, one
+off); 512k is `CONTEXT=524288` with an FP8 KV cache. Details for both are under
+[Configuration](#configuration).
 
 Full results, methodology and everything that was tried: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
