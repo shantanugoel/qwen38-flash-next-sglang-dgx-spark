@@ -169,6 +169,17 @@ if [[ -n "${PLE_OFFLOAD_BACKEND:-}" ]]; then
   opt+=(--ple-offload-backend "${PLE_OFFLOAD_BACKEND}")
   opt+=(--ple-offload-dir /ple)
 fi
+
+# Pin the served weights to REVISION. Without --revision SGLang follows the
+# cache's refs/main and can pull an unvalidated upload at boot. A local sibling
+# snapshot (D2) has no hub revision; the flag is then omitted. Its files are
+# symlinks into the HF cache, so that cache is also bind-mounted at its host
+# path (LOCAL_BLOBS_MOUNT) or the links dangle inside the container.
+REVISION_OPT=(--revision "${REVISION}")
+if [[ -z "${REVISION}" || "${REVISION}" == local-* ]]; then
+  REVISION_OPT=()
+fi
+
 docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
 
 # Opt-in for profiling boots only: py-spy needs ptrace inside the container.

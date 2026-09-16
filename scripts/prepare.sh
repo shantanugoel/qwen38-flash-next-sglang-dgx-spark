@@ -118,6 +118,13 @@ if [[ -f "${PLE_TABLE_BACKEND}" ]]; then
   python3 -m py_compile "${PLE_TABLE_BACKEND}"
 fi
 
+# serve.sh expands REVISION_OPT under set -u; bash does not flag an undefined
+# array there, so a lost definition silently drops the --revision pin.
+grep -q '^REVISION_OPT=(--revision ' "${SCRIPT_DIR}/serve.sh" || {
+  echo "serve.sh no longer pins --revision (REVISION_OPT undefined)" >&2
+  exit 1
+}
+
 python3 - <<PY
 from pathlib import Path
 qwen4 = Path("${QWEN4_BACKEND}").read_text()
