@@ -9,9 +9,23 @@ Combined plan from two reviews on 2026-09-14:
 2. **Cold-boot profile.** Where the ~9.5 min boot goes, re-checked against the
    running server's log, the checkpoint index and the pinned image's loader.
 
-Items are marked **Status: DONE** as they close. Every item follows the usual
-protocol: one `TAG=… ./scripts/run_config.sh` per variable, a log entry in
-`RESEARCH_LOG.md`, and accept or reject against the common gates.
+**All 12 items are closed (2026-09-14 → 2026-09-16).** Each has a
+`Status:` line below, a log entry in `RESEARCH_LOG.md`, and matched A/B boots
+behind it.
+
+| Outcome | Items |
+| --- | --- |
+| Accepted into the default | A1 (QSA clamp), B1 (draft file filter), C1 (PLE prefetch), D1 (rebase to main `8874c51a`) |
+| Accepted as optional modes | D2 (FP8 hybrid weights, +13–21% decode), D3 (512k with FP8 KV) |
+| Measured and rejected | B2 (PLE files already lazily mmapped), C2 (track interval 256), C3 (48k/32k draft maps), item 12 (weight cache is slower), plus the `pread` prefetch and `num_threads=16` |
+| Diagnostics, no default change | A2/A3/A4 (24 h soak: no decay, no KV corruption, aborts reaped), C4 (temperature-0 flips are kernel-level), B3 profile (boot is weight-loader bound) |
+
+Two findings outrank most of the planned work and need their own follow-ups:
+the **KV pool is committed lazily** (~24.8 KiB/token), so `MAX_TOTAL=524288`
+cannot be filled and a fresh prompt past ~150–190k tokens exhausts headroom
+(see C1); and **greedy decoding is not deterministic on this stack** (~1 in 10
+repeats diverge with a flushed cache, see C4), which is why single-sample
+quality comparisons here are unreliable.
 
 ## Where we stand
 
