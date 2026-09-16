@@ -21,7 +21,7 @@ SPEC_UTILS_BACKEND="${BUILD}/spec_utils.py"
 PLE_TABLE_BACKEND="${BUILD}/qwen4_exp_ple_table.py"
 LOADER_BACKEND="${BUILD}/loader.py"
 MTP_BACKEND="${BUILD}/qwen4_exp_mtp.py"
-SNAPSHOT="${HF_CACHE}/hub/models--${MODEL//\//--}/snapshots/${REVISION}"
+SNAPSHOT="${SNAPSHOT:-${HF_CACHE}/hub/models--${MODEL//\//--}/snapshots/${REVISION}}"
 
 docker_user() {
   local uid gid

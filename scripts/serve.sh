@@ -170,6 +170,14 @@ if [[ -n "${PLE_OFFLOAD_BACKEND:-}" ]]; then
   opt+=(--ple-offload-dir /ple)
 fi
 
+# A local sibling snapshot (D2) has no hub revision; the flag is then omitted.
+# Its files are symlinks into the HF cache, so that cache is also bind-mounted
+# at its host path (LOCAL_BLOBS_MOUNT) or the links dangle inside the container.
+REVISION_OPT=(--revision "${REVISION}")
+if [[ -z "${REVISION}" || "${REVISION}" == local-* ]]; then
+  REVISION_OPT=()
+fi
+
 docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
 
 # Opt-in for profiling boots only: py-spy needs ptrace inside the container.
@@ -203,11 +211,13 @@ docker run -d --name "${CONTAINER}" --init \
   -v "${HF_CACHE}:/huggingface" \
   -v "${SGLANG_CACHE}:/tmp/.cache/sglang" \
   -v "${PLE_DIR}:/ple" \
+  ${LOCAL_MODEL_MOUNT:+-v "${LOCAL_MODEL_MOUNT}"} \
+  ${LOCAL_BLOBS_MOUNT:+-v "${LOCAL_BLOBS_MOUNT}"} \
   "${MOUNTS[@]}" \
   "${IMAGE}" \
   sglang serve \
     --model-path "${MODEL}" \
-    --revision "${REVISION}" \
+    "${REVISION_OPT[@]}" \
     --served-model-name "${SERVED_NAME}" \
     --trust-remote-code \
     --host 0.0.0.0 \

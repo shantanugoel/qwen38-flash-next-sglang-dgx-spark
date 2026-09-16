@@ -3290,3 +3290,117 @@ Limits: two full-gate boots plus a validation boot on main; no GSM8K, BFCL or
 
 Rollback: set `IMAGE` back to the previous digest, kept in a comment in
 `scripts/common.sh`, and rerun `prepare.sh`. Next item: D2.
+
+
+## Sep 14 plan — D2: FP8 blockwise dense side layers (2026-09-16)
+
+**Decision: accepted as a documented opt-in, not the shipped default.** It is
+the largest decode win in this campaign — **+13% code, +21% Spanish prose,
++12% on 120-turn agentic, +14% single-stream** — at the cost of ~3% prefill
+TTFT, ~3% mixed-load stall, and a locally built 13 GiB sibling snapshot. GSM8K
+is a tie. `lm_head` is deliberately **not** converted.
+
+### Step 1: does block FP8 pay on SM121?
+
+`scripts/bench_block_fp8_linear.py` times BF16 `F.linear` against SGLang's
+128x128 block-FP8 linear at this checkpoint's real side-layer shapes, no model
+load. Two findings decided the design:
+
+| Shape (count) | M=1 | M=4 | M=4096 |
+| --- | ---: | ---: | ---: |
+| `linear_attn.in_proj_qkv` (36) | **3.24x** | 2.69x | 0.93x |
+| `linear_attn.in_proj_z` (36) | 2.93x | 3.10x | 0.88x |
+| `linear_attn.out_proj` (36) | 1.46x | 1.71x | 0.86x |
+| `self_attn.q_proj` (12) | 2.99x | 2.18x | 0.95x |
+| `self_attn.o_proj` (12) | 1.95x | 1.77x | 0.88x |
+| `lm_head` (1) | 2.61x | 1.93x | 0.97x |
+| `hyper_connection.down` (96) | **0.17x** | 0.15x | 0.48x |
+| `hyper_connection.up` (96) | unsupported: K=320 is not a multiple of 128 | | |
+
+- Decode (M=1..4) is bandwidth-bound and gains 1.5-3.2x; **prefill (M=4096)
+  loses 3-17%**, so this trades prefill for decode.
+- The auto-selected **DeepGEMM backend crashes on SM121** (`CUDA error:
+  unspecified launch failure` at M=4, poisoning the context) and its numerics
+  looked wrong (rel_l2 0.24 vs 0.037 for triton). Serving must pass
+  `--fp8-gemm-backend triton`. This is the plan's "vLLM needed an M % 4 padding
+  fix" unknown, in a different form.
+
+### What is converted, and why not more
+
+`scripts/build_fp8_hybrid_snapshot.py` symlinks the whole source snapshot and
+rewrites only the 4 shards that hold converted tensors (156 tensors, 13 GiB of
+new files; the source is untouched).
+
+- **Converted:** `linear_attn.in_proj_qkv/in_proj_z/out_proj`,
+  `self_attn.q_proj/k_proj/v_proj/o_proj`.
+- **`lm_head` is not converted.** The NEXTN draft shares the target `lm_head`
+  and the accepted U6 token map slices arbitrary rows out of it
+  (`head.data[hot_token_id]`); 128-row block scales cannot survive that slice.
+  Shinrali's +8.4% is therefore not available without giving up U6's +18%.
+- **Hyper-connections stay BF16** (0.15x at decode; K=320 unquantizable).
+- **The MTP draft stays BF16** and is excluded from the quant config.
+
+Three bugs found the hard way, each worth recording:
+
+1. **Every shard of a packed module must be converted together.** SGLang fuses
+   q/k/v into `qkv_proj` and in_proj_qkv/in_proj_z into `in_proj_qkvz`, and
+   `ModelOptMixedPrecisionConfig._resolve_quant_algo` applies one algo to the
+   whole fused layer. Converting only `q_proj` made the fused `qkv_proj` FP8
+   while k/v bytes stayed BF16 — the server emitted word salad.
+2. **`hf_quant_config.json` is only read when `config.json` has no
+   `quantization_config`** (`ModelConfig._parse_quant_hf_config`). The sibling
+   snapshot must therefore materialise a `config.json` with that key removed.
+   Until it did, the mixed config was silently ignored, FP8 bytes were cast
+   into BF16 parameters, and the model produced garbage while reporting
+   `quant=modelopt_fp4`. A "plumbing" boot on unconverted weights passed
+   precisely because the config was being ignored — it proved nothing.
+3. **The MTP's experts must not be marked NVFP4.** A regex that matched
+   `mtp.layers.0.mlp.experts` made the draft build packed params and die with
+   `size of tensor a (320) must match tensor b (640)`.
+
+Serving: `--quantization modelopt_mixed`, `--fp8-gemm-backend triton`,
+`SPEC_DRAFT_QUANT=auto`, `MOE_RUNNER_BACKEND=flashinfer_cutlass`, and its own
+PLE table copy (the identity guard correctly refuses to share a table across
+checkpoints, so `data/d2-ple-fp8` holds a copy). `serve.sh` gained
+`LOCAL_MODEL_MOUNT`/`LOCAL_BLOBS_MOUNT` and omits `--revision` for `local-*`.
+
+### Full gate, D1 pin, hybrid vs two BF16 baseline boots
+
+| Metric | main BF16 (2 runs) | **FP8 hybrid** |
+| --- | ---: | ---: |
+| Decode off code / ES / EN tok/s | 47.91–48.56 / 20.56–20.99 / 23.03–23.54 | **54.61 / 25.20 / 26.17** |
+| Decode on code / ES / EN tok/s | 37.89–40.55 / 25.52–27.06 / 30.99–32.01 | 39.31 / 31.46 / 37.17 |
+| 120-turn off decode (29-token mode) | 67.41–68.42 | **75.69–76.75** |
+| 120-turn on decode | 33.06–42.45 | 38.35–40.20 |
+| Streams c=1 / 2 / 4 | 48.48–49.00 / 79.36–84.35 / 128.28–132.55 | **55.56** / 83.50 / **137.00** |
+| Cold TTFT 8k / 32k / 128k s | 2.76 / 10.03–10.06 / 37.50–37.56 | 2.88 / 10.28 / 38.51 |
+| Prefix-warm 128k speedup | 63.98–64.19x | **70.55x** |
+| Mixed p95 stall / prefill TTFT s | 25.37–25.41 / 27.30–27.32 | 26.15 / 28.12 |
+| Weights / boot s / min MemAvailable | 83.6 GB / 521–530 / 10.11–10.36 | **78.85 GB** / **466** / **11.00** |
+| KV tokens | 524288 | 524288 |
+| Quality / needles / agentic invalid | 11/12 / pass / 0 | 11/12 / pass / 0 |
+| **GSM8K n=200** | **195/200 (97.5%)** | **196/200 (98.0%)** |
+| Arithmetic class probe (20 prompts x10) | 145/200 (72.5%) | 140/200 (70.0%) |
+| GSM8K wall s | 1795.0 | 1589.5 |
+
+Reading it. The decode gain is large and its ranges do not overlap the baseline
+(code off 51.87–55.54 vs 45.69–48.79). Boot is 55–64 s faster and memory
+headroom is 0.9 GB better, both because 4.8 GB less weight is loaded — the
+headroom directly helps the C1 memory ceiling. The costs are real but small:
+cold prefill +2.7% at 128k, mixed-load p95 +3%. Quality: GSM8K is a tie
+(1 question), the arithmetic class probe is 5 samples lower out of 200, and the
+knife-edge `effort_thinking_off` prompt is bad on both (0/20 vs 1/20 — C4
+explains why that prompt cannot arbitrate).
+
+Why opt-in and not the default: it needs a locally built 13 GiB sibling
+snapshot plus a 48 GiB PLE table copy, it makes prefill slightly worse on a
+recipe whose weak point is prefill, and the arithmetic probe moved the wrong
+way. The stock checkpoint remains the default; this is documented as the
+decode-maximising variant.
+
+Limits: one boot per arm for the full gate, one GSM8K run each, no 24 h soak on
+the hybrid, no BFCL, and `lm_head`/hyper-connections unconverted so the
+theoretical ceiling is not reached.
+
+Rollback: serve the stock checkpoint (unchanged default); delete
+`data/d2-fp8-hybrid` and `data/d2-ple-fp8`. Next item: D3.
