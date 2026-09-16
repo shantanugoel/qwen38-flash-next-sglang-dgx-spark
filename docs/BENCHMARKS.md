@@ -446,3 +446,50 @@ no surviving explanation, it is not a tuning lead, and it is not an argument for
 512k. Details in `RESEARCH_LOG.md`.
 
 
+
+## September 14–16 campaign (docs/14_SEP_IMPROVEMENTS_PLAN.md)
+
+Twelve planned items were executed; six changed the recipe. Everything below was
+measured on this box with matched A/B boots. Full reasoning per item is in
+`RESEARCH_LOG.md`.
+
+### What changed in the default
+
+| Item | Change | Effect |
+| --- | --- | --- |
+| A1 | Clamp the QSA extend compress gather (sglang#38346) | Removes an out-of-bounds read that the old pin really performed on any 1–3 token forward (chunk tails, page-aligned cache resends, tiny prompts). No speed change. |
+| B1 | The NEXTN draft reads only the 3 files holding `mtp.*` keys | Draft load 81–90 s → 31–33 s |
+| C1 | `SGLANG_QWEN4_PLE_FILE_PREFETCH=1` by default | Fresh-document prefill 4–5x faster at 32k, 2–3x at 128k (reverses U4b, which was measured on PLE-warm filler text) |
+| D1 | Pin moved to SGLang main `8874c51a` | Streams c=4 +14–18%, 128k prefix-warm reuse 48.6x → 64x; brings #34820, #37165, #38346, #38851, #38855, #39126 |
+
+Rejected after measurement: B2 (PLE files are already lazily mmapped, so skipping
+them saves ~6 s), C2 (`--mamba-track-interval 256` changes nothing once output
+modes are matched), C3 (48k/32k draft maps trade Spanish prose for nothing), the
+threaded `pread` prefetch, `num_threads=16`, and the post-load weight cache
+(item 12, which is *slower* than re-running the loaders).
+
+### Optional modes
+
+| Mode | How | Trade |
+| --- | --- | --- |
+| FP8 hybrid weights (D2) | `scripts/build_fp8_hybrid_snapshot.py`, then `--quantization modelopt_mixed --fp8-gemm-backend triton` | Decode +13–21% (code 54.6 tok/s, agentic 76 tok/s), boot 466 s, GSM8K 196/200 vs 195/200; costs ~3% prefill and 13 GB disk |
+| 512k context (D3) | `CONTEXT=524288 --kv-cache-dtype fp8_e4m3` | Needle recalled at 294k tokens, +6 GB headroom; costs 4–10% decode. The YaRN override is **not** needed |
+
+### Stability and behaviour
+
+- **24 h soak** (8,879 requests, 1,494 client disconnects): no MTP acceptance
+  decay (probe 3.73–3.80 throughout, sglang#37326 not reproduced), no corrupted
+  KV (sglang#38319 not reproduced), 0 errors. Requests do keep decoding briefly
+  after a client disconnects (up to ~105 output steps) but never held a slot.
+- **Temperature-0 output is not deterministic**: the same greedy prompt gives a
+  different token sequence about 1 time in 10 *with a flushed cache*, so the
+  cache is not the cause. This is why the `effort_thinking_off` quality case
+  keeps flipping between boots, and why single-sample greedy comparisons cannot
+  settle small differences here.
+- **The KV cache is committed lazily on unified memory** (~24.8 KiB/token at
+  BF16). A fresh prompt past roughly 150–190k tokens exhausts the remaining
+  headroom, which is what limits long fresh-document prefill — not the context
+  length. `MAX_TOTAL=524288` cannot actually be filled.
+- **Boot is weight-loader bound, not disk bound**: py-spy shows the main thread
+  inside FusedMoE/linear/embedding `weight_loader` calls in every sample, with
+  the reader threads idle.

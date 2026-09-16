@@ -14,10 +14,11 @@ Single stream on one GB10, default settings, thinking off unless noted.
 | Decode, code | **~47 tok/s** (~35–42 with thinking on) |
 | Decode, prose | ~22 tok/s |
 | Decode, agentic tool-calling session | ~68 tok/s |
-| Time to first token, 32k prompt (cold / cached prefix) | 10.5 s / 0.5 s |
-| Time to first token, 128k prompt (cold / cached prefix) | 42 s / 0.65 s |
-| Time to first token, ~248k prompt (cold) | ~8.5 min |
-| GSM8K (n=200) | 97.0% |
+| Time to first token, 32k prompt (cold / cached prefix) | 10.0 s / 0.4 s |
+| Time to first token, 128k prompt (cold / cached prefix) | 38–41 s / 0.4 s |
+| Time to first token, fresh 128k **document** (cold) | 2.5–5 min |
+| 4 concurrent streams, aggregate | ~130 tok/s |
+| GSM8K (n=200) | 97.5% |
 | BFCL subset (80 single-turn cases) | 72.5% |
 | Invalid tool calls across ~600 tool turns | 0 |
 
@@ -114,7 +115,23 @@ most people only need the first few.
 | `MAMBA_STRATEGY` | `extra_buffer` | Required by this model's attention layout |
 | `PLE_OFFLOAD_BACKEND` | `file` | Keep as `file`; in-RAM storage runs out of memory |
 | `SGLANG_QWEN4_PLE_REUSE` | `1` | `0` forces the on-disk embedding table to be rewritten |
-| `IMAGE` | pinned SGLang `4ccff141` digest | Container image |
+| `SGLANG_QWEN4_PLE_FILE_PREFETCH` | `1` | Page-prefetch for the embedding table. Keep on: it makes a fresh long document 2–5x faster to prefill |
+| `SGLANG_CHECKPOINT_KEY_FILTER` | `1` | `0` makes the speculative draft re-read all 206 checkpoint files (~55 s slower boot) |
+| `IMAGE` | pinned SGLang `8874c51a` digest | Container image |
+
+**Longer context (optional).** `CONTEXT=524288 MAX_TOTAL=524288
+SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 EXTRA_ARGS="--kv-cache-dtype fp8_e4m3"` boots
+and recalls a planted fact at 294k tokens, with roughly 6 GB more memory headroom. It
+costs about 4–10% decode speed, and a single prompt still cannot go much past ~340k
+tokens, so 262k stays the default.
+
+**Faster decode (optional, ~30 min to build).** `scripts/build_fp8_hybrid_snapshot.py`
+writes a sibling checkpoint whose attention and GDN projections are 128x128 block FP8,
+leaving the experts and `lm_head` untouched. Served with `--quantization modelopt_mixed
+--fp8-gemm-backend triton`, it decodes 13–21% faster (code 54.6 tok/s, agentic 76 tok/s),
+boots faster, and scored 196/200 on GSM8K against 195/200 for the stock weights. It costs
+~3% on prefill and needs ~13 GB of disk plus its own copy of the embedding table. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 `QSA_PREFILL_SELECTION=1 ./scripts/prepare.sh` enables an experimental prefill kernel
 ([sglang#38209](https://github.com/sgl-project/sglang/pull/38209)). It is correct but
