@@ -172,8 +172,15 @@ fi
 
 docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
 
+# Opt-in for profiling boots only: py-spy needs ptrace inside the container.
+PTRACE_OPT=()
+if [[ "${SERVE_PTRACE:-0}" == "1" ]]; then
+  PTRACE_OPT=(--cap-add SYS_PTRACE)
+fi
+
 docker run -d --name "${CONTAINER}" --init \
   --user "${UIDGID}" \
+  "${PTRACE_OPT[@]}" \
   "${extra_groups[@]}" \
   --gpus all \
   --ipc host \

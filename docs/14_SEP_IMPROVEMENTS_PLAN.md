@@ -187,6 +187,12 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### B3. Profile the remaining ~300 s before building anything
 
+- **Status: DONE 2026-09-16 (profile + threads A/B).** py-spy (needs `SERVE_PTRACE=1`
+  and `docker exec -u 0`) shows the main thread in FusedMoE/linear/embedding
+  `weight_loader` calls in every sample, with reader threads idle: per-tensor copy
+  cost over 296,475 tensors, not disk. `num_threads=16` made it slower (417.8 s vs
+  385.6–407.6 s). Only the item-12 weight cache could help. See RESEARCH_LOG
+  "Sep 14 plan — B3 (profile step)".
 - **Hypothesis (unconfirmed):** per-tensor Python overhead. ~296k tensors, mostly
   per-expert NVFP4 weights, handled at ~1,000/s. Not disk: raw NVMe is 8.7 GB/s
   and the load averages ~0.3 GB/s.
@@ -381,7 +387,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 5 | C2 track interval 256 — **done (rejected)** | 2 boots | possible agentic decode gain |
 | 6 | C3 draft vocab 48k/32k + EN prose bench — **done (rejected; EN prose added)** | 3 boots | possible +5–13% decode |
 | 7 | C4 determinism probe — **done (kernels, not cache)** | no boot | explains temp-0 flakiness |
-| 8 | B3 loader profile (py-spy, 16 threads) | 1 boot | decides whether a weight cache is worth it |
+| 8 | B3 loader profile (py-spy, 16 threads) — **done (weight-loader bound; 16 threads rejected)** | 1 boot | decides whether a weight cache is worth it |
 | 9 | D1 rebase onto SGLang main | several days | stability fixes; enables D2/D3 |
 | 10 | D2 FP8 hybrid side layers + FP8 `lm_head` | several days | possible +20–28% decode |
 | 11 | D3 512k (optional) | 2–3 boots | context beyond 262k |

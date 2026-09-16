@@ -3151,3 +3151,55 @@ Limits: ten repeats, two prompts, one boot; no attempt to identify which kernel
 upstream and was not tested).
 
 Rollback: none; probe-only. Next item: B3 loader profile.
+
+
+## Sep 14 plan — B3 (profile step): where the weight load goes (2026-09-16)
+
+**Finding: the load is weight-loader bound, not disk bound. `num_threads=16`
+does not help and is not adopted.** A post-load weight cache is the only lever
+the profile leaves (plan item 12).
+
+py-spy needed two fixes before it could attach: the container runs non-root, so
+`--cap-add SYS_PTRACE` is now available as `SERVE_PTRACE=1` in `serve.sh`
+(default off), and the dump has to run as `docker exec -u 0` — a non-root uid
+does not inherit the capability. `results/b3-profile/pyspy-failed-noptrace.txt`
+is the failed attempt.
+
+17 main-thread samples during the main load (`results/b3-profile/pyspy-live.txt`,
+`pyspy-sampled.txt`) land in weight loaders, never in file reads:
+
+| Main-thread frame | What it is |
+| --- | --- |
+| `_load_w13` / `_load_w2` → `FusedMoE.weight_loader` (`moe/fused_moe_triton/layer.py`) | per-expert copy into the fused MoE parameter |
+| `weight_loader` (`linear.py:752`, `linear.py:1404`, `qwen3_5.py:489/492`) | dense/GDN projections |
+| `weight_loader` (`vocab_parallel_embedding.py:507`), `default_weight_loader` | embeddings and the rest |
+| `_ple_shard_matches` → `copy_ple_rows_to_tp_embedding` | our PLE reuse sampling |
+
+The `ThreadPoolExecutor` reader threads were idle in every sample but one (a
+`torch/storage.py __getitem__` inside `_load_file`). With 296,475 tensors, of
+which 221,184 are per-expert NVFP4 scales, this is per-tensor Python and
+host→device copy cost on one thread.
+
+Step 2, the cheap A/B (`EXTRA_ARGS='--model-loader-extra-config {"num_threads":16}'`,
+`ONLY=smoke,decode`):
+
+| Arm | Main load s | Draft load s | Boot s |
+| --- | ---: | ---: | ---: |
+| 8 threads (default) | 407.57 | 32.71 | 522.25 |
+| 8 threads (profiling boot) | 398.67 | 32.07 | 510.36 |
+| 8 threads (confirm) | 385.62 | 31.75 | 500.56 |
+| **16 threads** | **417.80** | 31.35 | 531.91 |
+
+16 threads is 10–32 s *slower* than the three 8-thread boots, i.e. no better
+within the ±50 s noise established in B1. Consistent with the profile: reading
+is not the bottleneck, so more readers cannot help.
+
+What this means for plan item 12 (the post-load weight cache). It remains the
+only approach that could cut this phase, because `sharded_state` would save
+already-assembled parameters and skip exactly the per-expert `weight_loader`
+work that dominates. The practical blockers are unchanged and now better
+understood: it must survive our mounted model overlays and NVFP4
+post-processing, exclude the PLE table, be invalidated whenever weights change,
+and it would add ~84 GB on disk. Not attempted here.
+
+Rollback: nothing adopted; `SERVE_PTRACE` defaults to off. Next item: D1.
