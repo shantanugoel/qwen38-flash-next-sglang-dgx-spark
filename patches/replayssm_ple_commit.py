@@ -95,25 +95,69 @@ RING_HUNK = """        # snapshot; not wired for Part B (server_args forbids ext
 """
 
 
+PLE_ROLL = """        # PLE n-gram history + PLE short-conv state live outside the GDN
+        # commit; roll them to the last accepted node like the generic path
+        # does (hybrid_linear_attn_backend._update_ple_state_after_mtp_verify).
+        # sglang#37794: without this call the early return skips the PLE roll
+        # and the n-gram history freezes after the first verify step.
+        attn_backend = model_runner.attn_backend
+        if hasattr(attn_backend, "_update_ple_state_after_mtp_verify"):
+            _ple_track = batch.mamba_track_indices
+            if _ple_track is not None:
+                _ple_track = req_pool.translate_mamba_indices(_ple_track)
+            attn_backend._update_ple_state_after_mtp_verify(
+                req_pool.translate_mamba_indices(state_batch_indices),
+                last_correct_step_indices,
+                _ple_track,
+                mamba_steps_to_track,
+            )
+            if not getattr(logger, "_ple_replayssm_commit_logged", False):
+                logger._ple_replayssm_commit_logged = True
+                logger.info("ReplaySSM verify: committing PLE n-gram/short-conv state")
+"""
+
+
+def patch_gdn_branches(src: str) -> tuple[str, int]:
+    """Insert the PLE roll before the `return` of every GDN commit branch.
+
+    `commit_mamba_states_after_verify` has one early-return branch per
+    ReplaySSM variant, and which one a GDN model takes has moved between
+    releases (fold-every-commit on the U3 pin; compact replay on current main,
+    where `replayssm_spec_fold` additionally requires KDA). Patch whichever
+    branches call a `commit_gdn_replayssm*` kernel, and leave the KDA branch
+    alone: this recipe never serves KDA.
+    """
+    begin = src.index("def commit_mamba_states_after_verify(")
+    end = src.index("\ndef ", begin + 10)
+    lines = src[begin:end].split("\n")
+    out, patched, in_gdn = [], 0, False
+    for line in lines:
+        if "commit_gdn_replayssm" in line:
+            in_gdn = True
+        if "commit_kda_replayssm" in line:
+            in_gdn = False
+        if line == "        return" and in_gdn:
+            out.append(PLE_ROLL.rstrip("\n"))
+            patched += 1
+            in_gdn = False
+        out.append(line)
+    return src[:begin] + "\n".join(out) + src[end:], patched
+
+
 def main(path: str) -> int:
     with open(path, encoding="utf-8") as f:
         src = f.read()
-    if "ReplaySSM verify: committing PLE n-gram/short-conv state" in src:
+
+    if "_update_ple_state_after_mtp_verify" in src:
         print("ALREADY PATCHED:", path)
         return 0
-    if "NgramCorpus" in src or "_linearize_chain" in src:
-        print("ERROR: NGRAM worker leaked into spec_utils.py; refusing")
+    src, patched = patch_gdn_branches(src)
+    if patched == 0:
+        print("ERROR: no GDN commit branch found in commit_mamba_states_after_verify")
         return 1
-    if src.count(FOLD_ANCHOR) != 1:
-        print("ERROR: GDN fold early-return anchor not unique or missing")
-        return 1
-    if src.count(RING_ANCHOR) != 1:
-        print("ERROR: GDN ring early-return anchor not unique or missing")
-        return 1
-    src = src.replace(FOLD_ANCHOR, FOLD_HUNK, 1).replace(RING_ANCHOR, RING_HUNK, 1)
     with open(path, "w", encoding="utf-8") as f:
         f.write(src)
-    print("PATCHED:", path)
+    print(f"PATCHED ({patched} GDN branch(es)):", path)
     return 0
 
 

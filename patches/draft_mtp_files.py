@@ -24,37 +24,34 @@ from __future__ import annotations
 
 import sys
 
-SOURCE_OLD = '''        model_config: Optional[ModelConfig] = None
-        """The model configuration (for checking architecture, etc)."""
+SOURCE_FIELD = """        key_filter: Optional[Callable[[str], bool]] = None
+        \"\"\"Checkpoint key predicate; files holding no passing key are skipped.\"\"\"
 
-        @classmethod
-        def init_new(cls, model_config: ModelConfig, model):
-            return cls(
-                model_config.model_path,
-                model_config.revision,
-                prefix="",
-                fall_back_to_pt=getattr(model, "fall_back_to_pt_during_load", True),
-                model_config=model_config,
-            )
-'''
+"""
 
-SOURCE_NEW = '''        model_config: Optional[ModelConfig] = None
-        """The model configuration (for checking architecture, etc)."""
+INIT_FIELD = """                key_filter=getattr(model, "checkpoint_key_filter", None),
+"""
 
-        key_filter: Optional[Callable[[str], bool]] = None
-        """Checkpoint key predicate; files holding no passing key are skipped."""
 
-        @classmethod
-        def init_new(cls, model_config: ModelConfig, model):
-            return cls(
-                model_config.model_path,
-                model_config.revision,
-                prefix="",
-                fall_back_to_pt=getattr(model, "fall_back_to_pt_during_load", True),
-                model_config=model_config,
-                key_filter=getattr(model, "checkpoint_key_filter", None),
-            )
-'''
+def patch_default_loader_source(src: str) -> str:
+    """Add `key_filter` to DefaultModelLoader.Source and its init_new.
+
+    Anchored on the class region rather than on the exact field list, which
+    upstream extends (e.g. allow_patterns_overrides).
+    """
+    begin = src.index("class DefaultModelLoader(BaseModelLoader):")
+    end = src.index("\nclass ", begin + 10)
+    region = src[begin:end]
+    field_anchor = '        model_config: Optional[ModelConfig] = None\n'
+    doc_anchor = '        """The model configuration (for checking architecture, etc)."""\n'
+    i = region.index(field_anchor)
+    j = region.index(doc_anchor, i) + len(doc_anchor)
+    region = region[:j] + "\n" + SOURCE_FIELD.rstrip("\n") + "\n" + region[j:]
+    init_anchor = "                model_config=model_config,\n"
+    k = region.index(init_anchor) + len(init_anchor)
+    region = region[:k] + INIT_FIELD + region[k:]
+    return src[:begin] + region + src[end:]
+
 
 ITER_OLD = '''        else:
             hf_folder = resolved_source.hf_folder
@@ -152,7 +149,7 @@ def main(loader_path: str, mtp_path: str) -> int:
     if "_files_with_matching_keys" in loader:
         print("ALREADY PATCHED:", loader_path)
     else:
-        loader = replace_once(loader, SOURCE_OLD, SOURCE_NEW, "loader Source dataclass")
+        loader = patch_default_loader_source(loader)
         loader = replace_once(loader, ITER_OLD, ITER_NEW, "resolved-source branch")
         loader = replace_once(loader, HELPER_ANCHOR, HELPER + HELPER_ANCHOR,
                               "DefaultModelLoader class")

@@ -3203,3 +3203,90 @@ post-processing, exclude the PLE table, be invalidated whenever weights change,
 and it would add ~84 GB on disk. Not attempted here.
 
 Rollback: nothing adopted; `SERVE_PTRACE` defaults to off. Next item: D1.
+
+
+## Sep 14 plan — D1: rebase onto SGLang main (2026-09-16)
+
+**Decision: accepted. The pin moves from `4ccff141` to SGLang main `8874c51a`
+(`lmsysorg/sglang:nightly-dev-20260915-8874c51a`, digest
+`sha256:efec0e11a8e6ab1287c81830a214cf107f840a994e385a5c82a8077ded82782a`).**
+Every overlay is ported, every gate is equal or better, and the 4-stream
+aggregate improves 14–18%.
+
+Image choice: the nightly arm64 build of main published 2026-09-15, which is
+after #39126 merged (2026-09-13). Torch 2.13.0+cu130 and Triton 3.7.1 are the
+same as the old pin, so kernels are comparable.
+
+What the rebase brings (all merged upstream since our pin): **#34820** mamba
+prefix-cache checkpoints at the configured SSM dtype, **#37165** deferred-init
+metadata clear before spec decode, **#38346** the A1 clamp (now upstream, our
+patcher reports ALREADY PATCHED), **#38851**/**#38855** the FP8 KV / sparse
+gather fixes, and **#39126** the upstream file-backed PLE and PDL router fix.
+
+Overlay porting, the actual work:
+
+| Overlay | On main |
+| --- | --- |
+| `ple_file_compat`, `ple_reuse` | apply unchanged; boot still logs `128/128 shards already on disk, 0 copied` |
+| `qsa_drop_sm121_sdpa`, `qsa_sm121_triton` | apply unchanged; `Triton SM121 QSA` still logs (#36556 still open) |
+| `qsa_chunk_tail_clamp` (A1) | **no longer needed** — upstream has the clamp; patcher is idempotent |
+| `draft_mtp_files` (B1) | **ported**: upstream added `allow_patterns_overrides` to `Source`, so the patcher now edits the `DefaultModelLoader` region structurally instead of matching the exact field block |
+| `replayssm_ple_commit` (#37794) | **ported, and still required** (see below) |
+| `ple_pread_prefetch` | not applied (C1 rejected it) |
+
+The ReplaySSM port is the substantive finding. On main,
+`replayssm_spec_fold = enable_linear_replayssm_spec and cache_params.is_kda`,
+so a **GDN** model no longer takes the fold branch; it takes a new
+compact-replay branch. That branch also returns before the generic PLE roll, so
+#37794's gap is still real on main — but our old patch landed in a branch we no
+longer execute, which the harness caught ("ReplaySSM PLE commit did not log").
+The patcher now inserts the PLE roll before the `return` of **every** GDN
+branch (fold and compact) and leaves the KDA branch alone. On the old pin it
+still patches both branches; the fold branch (that pin's serving path) is
+byte-identical apart from comments, and the dead ring branch now passes real
+track indices instead of `None`.
+
+`serve.sh` also had to stop using `--enable-gdn-replayssm-spec`: main removed
+the deprecated alias. The canonical `--enable-linear-replayssm-spec` exists on
+both images and was re-validated on the old pin
+(`d1-pin-flagrename-20260916`, PLE commit logs, suites as before).
+
+Paired full gate, same checkpoint, PLE table, flags, prompts and suites
+(`PROFILE=u3 PREFILL=4096 N=3 SIZES=8k,32k,128k PREFILL_BENCH=1 STREAMS=1 MIXEDLOAD=1 TURNS=120`):
+
+| Metric | pin `4ccff141` | main `8874c51a` | main confirm |
+| --- | ---: | ---: | ---: |
+| Decode off code / prose ES / prose EN | 48.64 / 20.71 / 22.92 | 47.91 / 20.99 / 23.03 | 48.56 / 20.56 / 23.54 |
+| Decode on code / prose ES / prose EN | 39.63 / 26.04 / 29.12 | 40.55 / 27.06 / 30.99 | 37.89 / 25.52 / 32.01 |
+| Cold TTFT 8k / 32k / 128k s | 2.87 / 10.47 / 39.10 | 2.76 / 10.03 / 37.50 | 2.76 / 10.06 / 37.56 |
+| Prefix-warm speedup 32k / 128k | 22.9x / 48.6x | 25.4x / **64.2x** | 25.2x / **64.0x** |
+| Streams c=1 / 2 / 4 aggregate | 46.8 / 74.8 / 112.8 | 49.0 / 79.4 / **132.6** | 48.5 / 84.4 / **128.3** |
+| Mixed p95 stall / prefill TTFT s | 26.48 / 28.81 | 25.37 / 27.30 | 25.41 / 27.32 |
+| 120-turn off / on decode | 57.3–58.0 / 35.8–39.8 | 58.3–58.5 / 37.2–42.5 | 67.4–68.4 / 33.1–36.1 |
+| accept len mean | 2.973 | 3.063 | 2.859 |
+| Boot s / min MemAvailable GiB | 529.8 / 10.21 | 529.7 / 10.11 | 521.3 / 10.36 |
+| Quality / needles 8k,32k,128k | 11/12 / pass | 11/12 / pass | 11/12 / pass |
+
+Nothing regresses; 4-stream aggregate (+14–18%) and 128k prefix-warm reuse are
+the real gains, with mixed-load stall and 128k cold TTFT slightly better.
+
+**The one anomaly, recorded rather than waved away:** the main confirm boot's
+120-turn thinking-on run made 11 invalid tool calls, all of them the model
+inventing a tool named `audit` (alongside 108 valid `search_docs` calls). It is
+not truncation (no turn hit `max_tokens`). Three further 120-turn main boots
+(`d1-main-agentic2/3`) scored 0 invalid, as did every pin run; across the whole
+campaign this is the only hallucinated tool name in any agentic run. Given C4's
+kernel-level nondeterminism it reads as a trajectory artifact, but it is the one
+thing to watch on this engine. Late-recall pass/fail keeps flipping on both
+engines and is the documented credential refusal, not lost state.
+
+Final validation through the normal path (`build/` rebuilt from the new pin,
+`d1-newpin-validation-20260916`): boots, `8874c51a` reported by
+`/server_info`, quality 11/12, needles pass, decode in range.
+
+Limits: two full-gate boots plus a validation boot on main; no GSM8K, BFCL or
+24 h soak on the new engine; 250k prefill still unmeasured (see C1); the
+`audit` episode is unexplained.
+
+Rollback: set `IMAGE` back to the previous digest, kept in a comment in
+`scripts/common.sh`, and rerun `prepare.sh`. Next item: D2.

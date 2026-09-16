@@ -301,6 +301,14 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 
 ### D1. Rebase onto current SGLang main
 
+- **Status: DONE 2026-09-16, accepted.** Pin is now main `8874c51a`
+  (`sha256:efec0e11…`). All overlays ported: B1's loader patch is structural now, and
+  the #37794 PLE commit had to move — on main `replayssm_spec_fold` requires KDA, so
+  GDN takes a new compact-replay branch that still skips the PLE roll. `serve.sh` uses
+  `--enable-linear-replayssm-spec` (main removed the alias). Paired full gate: streams
+  c=4 +14–18%, 128k prefix-warm 48.6x → 64x, mixed p95 and 128k TTFT slightly better,
+  nothing worse. One unexplained `audit` tool hallucination in 1 of 4 agentic runs.
+  See RESEARCH_LOG "Sep 14 plan — D1".
 - **Gains:** A5 (#34820, #37165, #38346), the upstream file-backed PLE backend and
   router fix (#39126), the FP8 KV fixes (#38855, #38851), and the ModelOpt mixed
   loader with `FP8_BLOCK_SCALES` dispatch (prerequisite for D2).
@@ -388,7 +396,7 @@ Checkpoint facts, from `model.safetensors.index.json` at `7b719225`:
 | 6 | C3 draft vocab 48k/32k + EN prose bench — **done (rejected; EN prose added)** | 3 boots | possible +5–13% decode |
 | 7 | C4 determinism probe — **done (kernels, not cache)** | no boot | explains temp-0 flakiness |
 | 8 | B3 loader profile (py-spy, 16 threads) — **done (weight-loader bound; 16 threads rejected)** | 1 boot | decides whether a weight cache is worth it |
-| 9 | D1 rebase onto SGLang main | several days | stability fixes; enables D2/D3 |
+| 9 | D1 rebase onto SGLang main — **done (accepted)** | several days | stability fixes; enables D2/D3 |
 | 10 | D2 FP8 hybrid side layers + FP8 `lm_head` | several days | possible +20–28% decode |
 | 11 | D3 512k (optional) | 2–3 boots | context beyond 262k |
 | 12 | B3 weight cache (if the profile supports it) | days | boot ~6.5 → ~2–3 min |

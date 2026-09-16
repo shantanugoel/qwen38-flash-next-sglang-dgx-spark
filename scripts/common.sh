@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# U3 pin: SGLang 4ccff141 (MTP token-0 router #38290 + native PLE file backend).
-# Hub tags move; clones pull this digest. Local alias:
-#   lmsysorg/sglang:dev-qwen38-next-local-4ccff14
-IMAGE="${IMAGE:-lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6}"
+# D1 pin: SGLang main 8874c51a (nightly-dev-20260915), rebased from 4ccff141.
+# Brings #34820, #37165, #38346, #38851, #38855 and #39126. Hub tags move;
+# clones pull this digest. Tag: lmsysorg/sglang:nightly-dev-20260915-8874c51a
+IMAGE="${IMAGE:-lmsysorg/sglang@sha256:efec0e11a8e6ab1287c81830a214cf107f840a994e385a5c82a8077ded82782a}"
+# Previous pin (U3): sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6
 CONTAINER="${CONTAINER:-qwen38-flash-next}"
 MODEL="${MODEL:-RadixArk/Qwen3.8-Flash-Next-NVFP4}"
 REVISION="${REVISION:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}"

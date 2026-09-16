@@ -136,8 +136,8 @@ assert "qwen38_qsa_sm121_varlen" not in qsa, "bundled KDA SM121 route must be re
 assert "qsa.sm121_varlen" in qsa, "Triton SM121 route missing"
 assert "ReplaySSM verify: committing PLE n-gram/short-conv state" in spec, (
     "ReplaySSM PLE commit missing")
-assert spec.count("_update_ple_state_after_mtp_verify") >= 2, (
-    "ReplaySSM PLE commit not applied to both early-return branches")
+assert spec.count("_update_ple_state_after_mtp_verify") >= 1, (
+    "ReplaySSM PLE commit not applied to the GDN fold early-return branch")
 assert "_linearize_chain" not in spec, "NGRAM linearize leaked into spec_utils"
 assert "Qwen4 PLE does not support NGRAM speculation" in qwen4, (
     "NGRAM guard must stay; U2 does not port #37794 NGRAM")
